@@ -13,13 +13,13 @@ def extract_audio(video_path, audio_path):
     subprocess.call(['ffmpeg', '-i', video_path, '-q:a', '0', '-map', 'a', audio_path])
     print("Audio extraction complete.")
 
-# Step 2: Convert Audio to English Text with Timing using Whisper on GPU
-def transcribe_audio_to_english(audio_path):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+# Step 2: Convert Audio to English Text with Timing using Whisper on GPU or CPU
+def transcribe_audio_to_english(audio_path, force_cpu):
+    device = "cpu" if force_cpu or not torch.cuda.is_available() else "cuda"
     print(f"Using device: {device}")
-    model = whisper.load_model("large-v3", device=device)  # Using a larger model for better accuracy
+    model = whisper.load_model("large-v2", device=device)  # Using a larger model for better accuracy
     print("Starting audio transcription to text...")
-    result = model.transcribe(audio_path, task="translate")
+    result = model.transcribe(audio_path, task="translate", language="en")
     print("Transcription complete.")
     return result['segments']
 
@@ -37,7 +37,7 @@ def save_subtitles(segments, srt_path):
     print(f"Subtitles saved to {srt_path}")
 
 # Main function to process video and create English subtitles
-def create_english_subtitles(video_path):
+def create_english_subtitles(video_path, force_cpu):
     # Get the base name for the SRT file
     base_name = os.path.splitext(os.path.basename(video_path))[0]
     srt_path = f"{base_name}.srt"
@@ -46,15 +46,17 @@ def create_english_subtitles(video_path):
     with tempfile.TemporaryDirectory() as tmpdirname:
         audio_path = os.path.join(tmpdirname, 'extracted_audio.wav')
         extract_audio(video_path, audio_path)
-        segments = transcribe_audio_to_english(audio_path)
+        segments = transcribe_audio_to_english(audio_path, force_cpu)
         save_subtitles(segments, srt_path)
 
 # Entry point for the script
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Generate English subtitles for a video file.')
     parser.add_argument('-f', '--file', required=True, help='Path to the video file')
+    parser.add_argument('--forcecpu', action='store_true', help='Force the use of CPU instead of GPU')
     
     args = parser.parse_args()
     video_path = args.file
+    force_cpu = args.forcecpu
     
-    create_english_subtitles(video_path)
+    create_english_subtitles(video_path, force_cpu)

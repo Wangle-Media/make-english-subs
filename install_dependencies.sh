@@ -15,8 +15,8 @@ brew install ffmpeg
 
 # Install Python packages
 echo "Installing Python packages..."
-pip install openai-whisper
 pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu118
+pip install git+https://github.com/openai/whisper.git
 pip install srt
 
 echo "All dependencies installed successfully."
