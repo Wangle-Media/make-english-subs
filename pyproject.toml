@@ -1,0 +1,31 @@
+[project]
+name = "makesubs"
+version = "0.2.0"
+description = "Subtitle sidecars for dailies: local Whisper transcription and optional local LLM translation"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "numpy",
+    "faster-whisper==1.2.1",          # also provides Silero VAD on every platform
+    "ctranslate2>=4.5,<4.9",          # tested with 4.8 (CUDA 12, cuDNN 9)
+    "av<16",                          # faster-whisper 1.2.1 breaks with PyAV 16
+    "PySide6-Essentials>=6.7",
+    # NVIDIA runtime libraries for CTranslate2 (Windows/Linux); unused without an NVIDIA GPU
+    "nvidia-cublas-cu12; sys_platform != 'darwin'",
+    "nvidia-cudnn-cu12==9.*; sys_platform != 'darwin'",
+    # Apple Silicon backend
+    "mlx-whisper==0.4.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+
+[project.scripts]
+makesubs = "makesubs.cli:main"
+
+[project.gui-scripts]
+makesubs-gui = "makesubs.gui:main"
+
+[dependency-groups]
+dev = ["pytest"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

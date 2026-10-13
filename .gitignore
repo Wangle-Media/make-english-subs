@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+dist/
+# never commit media or generated subtitles
+*.mp4
+*.mov
+*.mxf
+*.wav
+*.srt
+*.avid.txt
+*.review.txt
