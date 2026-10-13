@@ -4,8 +4,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSettings, Qt, QThread, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QObject, QSettings, Qt, QThread, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QPlainTextEdit, QPushButton, QVBoxLayout,
@@ -165,6 +165,7 @@ class DropList(QListWidget):
 class Worker(QObject):
     log = Signal(str)
     finished = Signal(bool)
+    folder = Signal(str)  # where the subtitle files ended up
 
     def __init__(self, files, opts):
         super().__init__()
@@ -175,8 +176,17 @@ class Worker(QObject):
             jobs = run([Path(f) for f in self.files], self.opts, self.log.emit)
             self.log.emit("")
             for j in jobs:
-                self.log.emit(f"{'FAILED' if j.error else 'OK'}  {j.info.path.name}"
-                              + (f": {j.error}" if j.error else ""))
+                if j.error:
+                    self.log.emit(f"FAILED  {j.info.path.name}: {j.error}")
+                    continue
+                subs = [p for p in j.outputs if not p.name.endswith(".review.txt")]
+                where = subs[0].parent if subs else j.info.path.parent
+                self.log.emit(f"OK      {j.info.path.name}: {len(subs)} subtitle files in {where}")
+                flagged = sum(c.flagged for c in j.source_cues)
+                if flagged:
+                    self.log.emit(f"        {flagged} line{'s' if flagged > 1 else ''} marked [?] "
+                                  f"to check, see {j.info.path.stem}.review.txt")
+                self.folder.emit(str(Path(where).resolve()))
             self.finished.emit(bool(jobs) and not any(j.error for j in jobs))
         except Exception as e:  # noqa: BLE001 - show anything to the editor
             self.log.emit(f"Error: {e}")
@@ -262,10 +272,19 @@ class Window(QMainWindow):
         form.addRow("", self.overwrite)
         lay.addWidget(box)
 
+        row = QHBoxLayout()
         self.go = QPushButton("3. Make subtitles")
         self.go.setMinimumHeight(36)
         self.go.clicked.connect(self.start)
-        lay.addWidget(self.go)
+        self.show_files = QPushButton("Show subtitle files")
+        self.show_files.setMinimumHeight(36)
+        self.show_files.setEnabled(False)
+        self.show_files.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(self.result_dir)))
+        self.result_dir = ""
+        row.addWidget(self.go, 3)
+        row.addWidget(self.show_files, 1)
+        lay.addLayout(row)
 
         self.log = QPlainTextEdit(readOnly=True)
         self.log.setFont(QFont("Monospace", 9))
@@ -372,6 +391,8 @@ class Window(QMainWindow):
                        out_dir=Path(self.out_dir) if self.out_dir else None,
                        overwrite=self.overwrite.isChecked())
         self.log.clear()
+        self.result_dir = ""
+        self.show_files.setEnabled(False)
         self.go.setEnabled(False)
         self.go.setText("Working… (first run downloads models)")
         self.thread = QThread()
@@ -379,14 +400,21 @@ class Window(QMainWindow):
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.log.connect(self.say)
+        self.worker.folder.connect(self.set_result_dir)
         self.worker.finished.connect(self.done)
         self.worker.finished.connect(self.thread.quit)
         self.thread.start()
 
+    def set_result_dir(self, d: str):
+        if not self.result_dir:
+            self.result_dir = d
+            self.show_files.setEnabled(True)
+
     def done(self, ok: bool):
         self.go.setEnabled(True)
         self.go.setText("3. Make subtitles")
-        self.say("\nAll done." if ok else "\nFinished with problems — see above.")
+        self.say("\nAll done. Click 'Show subtitle files' to open the folder." if ok
+                 else "\nFinished with problems, see above.")
 
     def say(self, text: str):
         self.log.appendPlainText(text)
