@@ -42,20 +42,79 @@ When it finishes you have a **MakeSubs** shortcut on the desktop (Windows) or in
 
 ## Using it
 
-1. Drag clips (or whole folders) into the window.
-2. **Spoken in clips**: choose the language(s) people actually speak.
-   **Setting the language gives better results than auto-detect.** If only one language is
-   spoken, choose just that one. Use *Auto-detect* only when you really don't know.
-3. **Subtitles in**: English, Danish, or other language codes (`de`, `fr`, `sv`, ...).
-   Anything other than English needs the high-quality translator.
-4. **Audio**: *Mix all channels* is fine for camera scratch audio. If one channel is clearly
-   better (e.g. a boom on channel 1), pick it.
-5. **For NLE**: `.srt` for Premiere/Resolve, SubCap for Avid (or both).
-6. **Notes**: names of characters, places and special terms help the translator spell them right.
-7. Click **Make subtitles**. The first run downloads models and takes longer.
+Open **MakeSubs** from the desktop shortcut (Windows) or `~/Applications` (Mac). The window
+has three numbered steps, from top to bottom.
 
-On a recent NVIDIA card or M-series Mac, expect roughly a minute per few minutes of
-footage, plus about 30–90 s per clip and language for high-quality translation.
+![The MakeSubs window after a finished run](docs/window.png)
+
+### 1. Add clips
+
+Drag clips, or whole folders of clips, onto the list at the top. You can also click
+**Add files…**. The clips are only read, never changed. **Clear list** empties the list
+(it doesn't touch any files).
+
+### 2. Settings
+
+**Spoken in clips**: click the button and tick the language(s) people actually speak.
+Type in the search box to find a language quickly; clicking its name ticks it.
+
+![Choosing languages](docs/language-picker.png)
+
+**Setting the language gives better results than auto-detect.** If only one language is
+spoken, tick just that one. Tick *Don't know — auto-detect* only when you really don't know.
+
+**Subtitles in**: tick English, Danish or any other language, the same way.
+
+**Translation** shows which translator will be used:
+
+- Green *Local LLM ready*: the high-quality translator is running. Any subtitle language works.
+- Orange *Basic: English only*: only English subtitles, in lower quality. If you installed the
+  high-quality translator, start the **Ollama** app and click **Check again**.
+
+**Audio**: *Mix all channels* is fine for camera scratch audio. If one channel is clearly
+better (e.g. a boom on channel 1), pick it.
+
+**For NLE**: *Premiere / Resolve (.srt)*, *Avid SubCap*, or both.
+
+**Notes**: names of characters, places and special terms, e.g.
+`Characters: Nidal, Yasmin. Places: Jenin, Nablus.` This helps the translator spell them right.
+
+**Save to**: *Next to each clip* by default. Click **Choose…** to put all subtitle files in one
+folder instead, and **Next to clips** to go back.
+
+**Replace existing subtitle files**: leave this off to skip clips that already have subtitles,
+so a second run doesn't overwrite files you've already checked. Tick it to make them again.
+
+MakeSubs remembers these settings for next time.
+
+### 3. Make subtitles
+
+Click **Make subtitles**. The box underneath shows what's happening. The first run downloads
+the models (several GB) and takes longer; after that, expect roughly a minute per few minutes
+of footage on a recent NVIDIA card or M-series Mac, plus about 30–90 s per clip and language
+for high-quality translation. Wait for it to finish before closing the window.
+
+When it's done, the box ends with a summary per clip:
+
+```
+OK      A001C003.mov: 4 subtitle files in D:\Dailies\Day01
+        1 line marked [?] to check, see A001C003.review.txt
+OK      B002C011.mxf: 4 subtitle files in D:\Dailies\Day01
+
+All done. Click 'Show subtitle files' to open the folder.
+```
+
+Click **Show subtitle files** to open that folder. Then import the files into your NLE (see
+[Importing into the NLE](#importing-into-the-nle)), and have the lines marked `[?]` checked.
+
+### If something goes wrong
+
+| Message in the box | What to do |
+|---|---|
+| `SKIP …: subtitles already exist` | That clip was done before. Tick *Replace existing subtitle files* to make them again. |
+| `SKIP …: no audio` | The file has no sound (or isn't a video). Use a version of the clip with audio. |
+| `… needs the high-quality translator (Ollama)` (orange, under *Subtitles in*) | Start the Ollama app and click **Check again**, or untick the non-English languages. |
+| `FAILED …` | Something went wrong with that clip; the reason is on the same line. The other clips still finish. |
 
 ### What you get
 
