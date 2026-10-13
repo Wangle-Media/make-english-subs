@@ -133,3 +133,18 @@ def test_output_paths_are_sidecars(clip):
                             "A001C001.da.srt", "A001C001.da.avid.txt"])
     assert all(p.parent == clip.parent for p in outs)
     assert output_path(info, Options(), "en", "srt") != clip
+
+
+def test_model_dir_avoids_non_ascii_user_folder_on_windows(monkeypatch):
+    from huggingface_hub import constants
+
+    from makesubs import asr
+    monkeypatch.setattr(asr.sys, "platform", "win32")
+    monkeypatch.setenv("PROGRAMDATA", r"C:\ProgramData")
+    monkeypatch.setattr(constants, "HF_HUB_CACHE", r"C:\Users\Søren\.cache\huggingface\hub")
+    assert asr._model_dir().isascii()
+    monkeypatch.setattr(constants, "HF_HUB_CACHE", r"C:\Users\Soren\.cache\huggingface\hub")
+    assert asr._model_dir() is None
+    monkeypatch.setattr(asr.sys, "platform", "darwin")
+    monkeypatch.setattr(constants, "HF_HUB_CACHE", "/Users/Søren/.cache/huggingface/hub")
+    assert asr._model_dir() is None
