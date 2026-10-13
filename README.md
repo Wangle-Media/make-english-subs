@@ -94,14 +94,148 @@ check those lines before anything goes to a client or into a cut that depends on
 
 ## Command line
 
-The installer also adds `makesubs`:
+The installer also adds a `makesubs` command, which does the same as the window and is handy
+for batches and scripts. Open a **new** Terminal/PowerShell window after installing so the
+command is found.
+
+```
+makesubs [options] CLIP [CLIP ...]
+```
+
+With no options it uses the same defaults as the window: Arabic + English spoken, English
+subtitles, `.srt`, all audio channels mixed, files written next to each clip.
+
+### Examples
 
 ```bash
-makesubs A001C003.mov B002C011.mxf -t en,da -s ar,en -f srt,avid
-makesubs --info A001C003.mov            # timecode, frame rate, audio channels
-makesubs clips/*.mov -c 1 -o subs/      # channel 1 only, write into subs/
-makesubs --help
+# English subtitles for one clip
+makesubs A001C003.mov
+
+# English and Danish, for Premiere/Resolve and Avid
+makesubs A001C003.mov B002C011.mxf --to en,da --format srt,avid
+
+# Only Arabic is spoken: say so, it gives better results
+makesubs A001C003.mov --spoken ar
+
+# Check timecode, frame rate and audio channels before choosing one
+makesubs --info A001C003.mov
+
+# Use only channel 1 (e.g. the boom) and write the files into another folder
+makesubs A001C003.mov --channel 1 --out ~/Desktop/subs
+
+# Help the translator spell names and places
+makesubs A001C003.mov --to en,da --note "Characters: Nidal, Yasmin. Places: Jenin, Nablus."
 ```
+
+A whole day's clips (MakeSubs takes files, not folders, on the command line):
+
+```bash
+# Mac
+makesubs /Volumes/Dailies/Day01/*.mov --to en,da
+```
+
+```powershell
+# Windows (PowerShell)
+makesubs (Get-ChildItem D:\Dailies\Day01\*.mov).FullName --to en,da
+```
+
+### Example output
+
+Real output from a 29.97 drop-frame test clip with two mono audio tracks and Syrian Arabic
+speech.
+
+`makesubs --info B002C011.mxf` shows what MakeSubs reads from the clip:
+
+```
+B002C011.mxf: 54.0s, 29.970 DF, TC 09:59:58;00, a0:1ch, a1:1ch
+  reel: -; channels: 1 (stream 1, ch 1), 2 (stream 2, ch 1)
+```
+
+`makesubs B002C011.mxf --to en,da --format srt,avid` writes these files next to the clip:
+
+```
+B002C011.transcript.srt        B002C011.transcript.avid.txt
+B002C011.en.srt                B002C011.en.avid.txt
+B002C011.da.srt                B002C011.da.avid.txt
+B002C011.review.txt
+```
+
+`B002C011.transcript.srt` contains what was said, in the spoken language. Times start at the
+clip's first frame:
+
+```
+1
+00:00:00,601 --> 00:00:03,971
+مرحبا أنا اسمي دال وأنا من سوريا أعيش
+```
+
+`B002C011.en.srt`:
+
+```
+1
+00:00:00,601 --> 00:00:03,971
+Hello, my name is Nidal
+and I'm from Syria. I live
+```
+
+`B002C011.da.avid.txt` is the same subtitle for Avid, on the clip's source timecode:
+
+```
+@ makesubs
+
+<begin subtitles>
+
+09:59:58;18 10:00:01;29
+Hej, mit navn er Nidal,
+og jeg er fra Syrien.
+```
+
+`review.txt` from a different clip, where one line was hard to hear:
+
+```
+Clip:        A001C003.mov
+Source TC:   14:23:11:05   fps: 23.976
+Languages:   en, ar
+Translation: local LLM (gemma3:12b)
+Subtitles:   13, of which 1 need review ([?] in the files)
+...
+14:24:20:02  (50%)  وانتهى الامر
+```
+
+The timecode on each review line takes you straight to the spot in the source clip.
+
+### Options
+
+| Option | Default | What it does |
+|---|---|---|
+| `-t`, `--to LANGS` | `en` | Subtitle languages, comma-separated: `en`, `en,da`, `en,da,de`. Anything other than `en` needs the high-quality translator. |
+| `-s`, `--spoken LANGS` | `ar,en` | Languages spoken in the clips, or `auto`. Name the real ones: it beats `auto`, and a single language (e.g. `ar`) is most robust when nobody switches. |
+| `-f`, `--format LIST` | `srt` | `srt` (Premiere/Resolve), `avid` (SubCap), or `srt,avid`. |
+| `-c`, `--channel N` | `mix` | `mix` averages all audio, or a channel number as listed by `--info`. |
+| `-o`, `--out FOLDER` | next to clip | Write subtitle files into this folder (created if missing). |
+| `--note TEXT` | | Names, places and terms for the translator. |
+| `--avid-start TC` | clip source TC | Sequence start timecode for SubCap files, e.g. `01:00:00:00`. |
+| `--overwrite` | off | Replace existing subtitle files (otherwise those clips are skipped). |
+| `--info` | | Only show each clip's timecode, frame rate, reel and audio channels. |
+| `--setup` | | Download the models now, then exit (the installer does this). |
+| `--version` | | Show the installed version. |
+
+Less common options:
+
+| Option | Default | What it does |
+|---|---|---|
+| `--translator` | `auto` | `llm` (Ollama, any language), `whisper` (built-in, English only), or `auto` (`llm` when Ollama is running). |
+| `--llm-model NAME` | `gemma3:12b` | Ollama model used for translation. |
+| `--threshold N` | `0.6` | Confidence (0–1) below which a line is marked `[?]`. Higher marks more lines. |
+| `--no-marks` | off | Leave `[?]` out of the subtitle text; flagged lines are still listed in `review.txt`. |
+| `--backend` | `auto` | Force `faster-whisper` (NVIDIA/CPU) or `mlx` (Apple Silicon). |
+| `--whisper-model NAME` | large-v3 | Different speech model for a quick test on a slow machine: `medium` on Windows, `mlx-community/whisper-medium-mlx` on a Mac. Expect worse Arabic. |
+
+Language codes are the usual two-letter codes: `ar` Arabic, `en` English, `da` Danish,
+`de` German, `fr` French, `sv` Swedish, `no` Norwegian, `he` Hebrew, and so on.
+
+When it finishes, `makesubs` lists every file it wrote per clip. It exits with status 0 when
+all clips succeeded and 1 if any failed, so it can be used in scripts.
 
 ## Known limitations
 
