@@ -37,8 +37,27 @@ model). Say yes unless disk space is tight: it gives clearly better English, and
 for Danish and other target languages. You can run the installer again at any time to update
 or to add the translator later.
 
+The installer also runs a short test of the speech recognition. If it says
+**WARNING: no usable NVIDIA GPU** on a PC that has an NVIDIA card, update the graphics driver
+from [nvidia.com](https://www.nvidia.com/Download/index.aspx) and run the installer again;
+otherwise MakeSubs runs on the CPU, which is very slow. If the installer stops with an error,
+copy the text in the window and send it to whoever set up MakeSubs for you.
+
 When it finishes you have a **MakeSubs** shortcut on the desktop (Windows) or in
 `~/Applications` (Mac).
+
+### Uninstall
+
+**Windows** (PowerShell) / **Mac** (Terminal):
+
+```
+uv tool uninstall makesubs
+```
+
+Then delete the shortcut, and to free the disk space used by the speech model, the folder
+`.cache\huggingface` in your user folder (Windows; also `C:\ProgramData\MakeSubs` if it
+exists) or `~/.cache/huggingface` (Mac). Remove **Ollama** like any other app if you
+installed the translator and don't need it for anything else.
 
 ## Using it
 
@@ -115,6 +134,10 @@ Click **Show subtitle files** to open that folder. Then import the files into yo
 | `SKIP …: no audio` | The file has no sound (or isn't a video). Use a version of the clip with audio. |
 | `… needs the high-quality translator (Ollama)` (orange, under *Subtitles in*) | Start the Ollama app and click **Check again**, or untick the non-English languages. |
 | `FAILED …` | Something went wrong with that clip; the reason is on the same line. The other clips still finish. |
+| A box saying *MakeSubs: unexpected error* | Send the file it names (`makesubs.log`) to whoever set up MakeSubs for you. |
+
+The log file is in `%LOCALAPPDATA%\Wangle Media\MakeSubs` (Windows) or
+`~/Library/Application Support/Wangle Media/MakeSubs` (Mac).
 
 ### What you get
 

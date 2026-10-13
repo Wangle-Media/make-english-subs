@@ -52,10 +52,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def setup(args) -> int:
+    import numpy as np
+
     from .asr import create_engine
+    from .audio import SAMPLE_RATE
     print("Downloading/checking speech recognition model (about 3 GB the first time)...")
     engine = create_engine(args.backend, args.whisper_model)
+    # Loading the model doesn't touch every GPU library (cuDNN loads on first use), so run
+    # a short test transcription now rather than failing on the editor's first real job.
+    print("Testing speech recognition...")
+    noise = np.random.default_rng(0).normal(0, 0.01, 3 * SAMPLE_RATE).astype(np.float32)
+    engine.run(noise, "en", "transcribe")
     print(f"OK: {engine.name}")
+    if engine.device == "cpu":
+        print("WARNING: no usable NVIDIA GPU, so MakeSubs will run on the CPU (very slow).\n"
+              "On a PC with an NVIDIA card, update the graphics driver from nvidia.com "
+              "and run the installer again.")
     engine.unload()
     if translate.available():
         translate.ensure_model(args.llm_model)

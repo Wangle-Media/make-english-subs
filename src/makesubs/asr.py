@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import gc
+import os
 import platform
 import re
 import sys
@@ -57,6 +58,7 @@ class Transcript:
 
 class Engine:
     name = "?"
+    device = "?"  # "cuda", "cpu" or "mlx"
 
     def detect(self, audio: np.ndarray) -> dict[str, float]:
         raise NotImplementedError
@@ -68,18 +70,36 @@ class Engine:
         pass
 
 
+def _model_dir() -> str | None:
+    """Where to keep Whisper models, if not the default Hugging Face cache.
+
+    CTranslate2 on Windows opens model files with narrow (ANSI) paths, so a user folder
+    like C:\\Users\\Søren breaks model loading. Use an ASCII-only folder in that case.
+    """
+    if sys.platform != "win32":
+        return None
+    from huggingface_hub import constants
+    if constants.HF_HUB_CACHE.isascii():
+        return None
+    return os.path.join(os.environ.get("PROGRAMDATA", r"C:\ProgramData"), "MakeSubs", "models")
+
+
 class FasterWhisperEngine(Engine):
     def __init__(self, model: str = "large-v3", device: str = "auto"):
         from .tools import load_nvidia_libs
         load_nvidia_libs()
+        # Windows without developer mode can't symlink; HF falls back to copying, which is fine.
+        os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
         import ctranslate2
         from faster_whisper import WhisperModel
 
         if device == "auto":
             device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
         compute = "float16" if device == "cuda" else "int8"
+        self.device = device
         self.name = f"faster-whisper {model} ({device}, {compute})"
-        self.model = WhisperModel(model, device=device, compute_type=compute)
+        self.model = WhisperModel(model, device=device, compute_type=compute,
+                                  download_root=_model_dir())
 
     def detect(self, audio):
         _lang, _p, probs = self.model.detect_language(audio)
@@ -104,6 +124,7 @@ class MlxEngine(Engine):
         from mlx_whisper.transcribe import ModelHolder
 
         self.repo = model
+        self.device = "mlx"
         self.name = f"mlx-whisper {model}"
         self._mx = mx
         self.model = ModelHolder.get_model(model, mx.float16)

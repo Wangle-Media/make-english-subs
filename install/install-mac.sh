@@ -24,7 +24,8 @@ fi
 uv --version
 
 step "Installing MakeSubs ($REF)"
-uv tool install --force --python 3.12 "makesubs @ $SOURCE"
+# --reinstall-package: always fetch the latest code, even though the download link is the same.
+uv tool install --force --reinstall-package makesubs --python 3.12 "makesubs @ $SOURCE"
 uv tool update-shell >/dev/null || true
 
 step "Optional: high-quality translation (Ollama + about 8 GB model)"
@@ -46,7 +47,7 @@ if [[ ! "$answer" =~ ^[nN] ]]; then
     /Applications/Ollama.app/Contents/Resources/ollama pull "$LLM_MODEL"
 fi
 
-step "Downloading the speech model (about 3 GB, once)"
+step "Downloading and testing the speech model (about 3 GB, once)"
 "$BIN/makesubs" --setup
 
 step "Creating MakeSubs app"

@@ -2,14 +2,15 @@
 from __future__ import annotations
 
 import sys
+import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSettings, Qt, QThread, QUrl, Signal
+from PySide6.QtCore import QObject, QSettings, QStandardPaths, Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
-    QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QPlainTextEdit, QPushButton, QVBoxLayout,
-    QWidget,
+    QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
+    QVBoxLayout, QWidget,
 )
 
 from . import __version__, languages, translate
@@ -436,9 +437,35 @@ def _split(codes) -> list[str]:
     return [c.strip().lower() for c in codes or [] if c.strip()]
 
 
+def _use_log_file() -> Path | None:
+    """Started from a shortcut there is no console (on Windows sys.stderr is None, which
+    breaks anything that prints, e.g. download progress bars). Write to a log file instead."""
+    if sys.stderr is not None and sys.stderr.isatty():
+        return None
+    folder = Path(QStandardPaths.writableLocation(QStandardPaths.AppLocalDataLocation))
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "makesubs.log"
+    log = open(path, "a", encoding="utf-8", buffering=1)  # noqa: SIM115 - lives as long as the app
+    sys.stdout = sys.stderr = log
+    return path
+
+
+def _show_crash(log_path: Path | None):
+    def hook(kind, value, tb):
+        traceback.print_exception(kind, value, tb)
+        where = f"\n\nDetails are in {log_path}" if log_path else ""
+        QMessageBox.critical(None, "MakeSubs: unexpected error", f"{value}{where}")
+    sys.excepthook = hook
+
+
 def main() -> int:
     app = QApplication(sys.argv)
+    app.setOrganizationName("Wangle Media")
     app.setApplicationName("MakeSubs")
+    log_path = _use_log_file()
+    if log_path:
+        print(f"\n--- MakeSubs {__version__} started")
+    _show_crash(log_path)
     w = Window()
     w.show()
     return app.exec()
