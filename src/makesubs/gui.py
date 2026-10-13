@@ -7,21 +7,126 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QSettings, Qt, QThread, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QPlainTextEdit, QPushButton, QVBoxLayout,
     QWidget,
 )
 
-from . import __version__, translate
+from . import __version__, languages, translate
 from .pipeline import Options, run
 
-SPOKEN_PRESETS = [
-    ("Arabic + English", "ar,en"),
-    ("Arabic", "ar"),
-    ("Danish + English", "da,en"),
-    ("English", "en"),
-    ("Auto-detect (any language)", "auto"),
-]
+
+class LanguagePicker(QPushButton):
+    """Button showing the chosen languages; click for a searchable list with tick boxes."""
+    changed = Signal()
+
+    def __init__(self, names: dict[str, str], allow_auto: bool = False):
+        super().__init__()
+        self.setStyleSheet("text-align: left; padding: 4px 8px")
+        self.popup = QFrame(self, Qt.Popup)
+        self.popup.setFrameShape(QFrame.StyledPanel)
+        lay = QVBoxLayout(self.popup)
+        self.search = QLineEdit(placeholderText="Search languages…")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._filter)
+        lay.addWidget(self.search)
+        self.auto = None
+        if allow_auto:
+            self.auto = QCheckBox("Don't know — auto-detect (less accurate)")
+            self.auto.toggled.connect(self._auto_toggled)
+            lay.addWidget(self.auto)
+        self.list = QListWidget()
+        common = [c for c in languages.COMMON if c in names]
+        rest = sorted((c for c in names if c not in common), key=names.get)
+        for code in common + rest:
+            item = QListWidgetItem(names[code])
+            item.setData(Qt.UserRole, code)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            self.list.addItem(item)
+            if code == common[-1]:
+                line = QListWidgetItem("All languages")
+                line.setFlags(Qt.NoItemFlags)
+                self.list.addItem(line)
+        self.list.itemChanged.connect(self._item_changed)
+        self.list.itemClicked.connect(self._toggle_on_text_click)
+        lay.addWidget(self.list)
+        self.clicked.connect(self._open)
+        self._refresh()
+
+    def _items(self):
+        for i in range(self.list.count()):
+            item = self.list.item(i)
+            if item.data(Qt.UserRole):
+                yield item
+
+    def codes(self) -> list[str]:
+        if self.auto and self.auto.isChecked():
+            return ["auto"]
+        return [i.data(Qt.UserRole) for i in self._items() if i.checkState() == Qt.Checked]
+
+    def set_codes(self, codes: list[str]) -> None:
+        self.list.blockSignals(True)
+        for item in self._items():
+            item.setCheckState(Qt.Checked if item.data(Qt.UserRole) in codes else Qt.Unchecked)
+        self.list.blockSignals(False)
+        if self.auto:
+            self.auto.blockSignals(True)
+            self.auto.setChecked(codes == ["auto"])
+            self.auto.blockSignals(False)
+        self._refresh()
+
+    def _open(self):
+        self.search.clear()
+        self.popup.resize(max(self.width(), 300), 340)
+        self.popup.move(self.mapToGlobal(self.rect().bottomLeft()))
+        self.popup.show()
+        self.search.setFocus()
+
+    def _filter(self, text: str):
+        t = text.strip().lower()
+        for i in range(self.list.count()):
+            item = self.list.item(i)
+            code = item.data(Qt.UserRole)
+            item.setHidden(bool(t) and (not code or not (
+                item.text().lower().startswith(t) or code == t)))
+
+    _just_changed = False  # the tick box itself was clicked
+
+    def _toggle_on_text_click(self, item):
+        # Clicking the name, not just the small box, ticks it too.
+        if item.data(Qt.UserRole) and not self._just_changed:
+            item.setCheckState(Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked)
+        self._just_changed = False
+
+    def _item_changed(self, item):
+        self._just_changed = True
+        if self.auto and item.checkState() == Qt.Checked:
+            self.auto.blockSignals(True)
+            self.auto.setChecked(False)
+            self.auto.blockSignals(False)
+        self._refresh()
+
+    def _auto_toggled(self, on: bool):
+        if on:
+            self.list.blockSignals(True)
+            for item in self._items():
+                item.setCheckState(Qt.Unchecked)
+            self.list.blockSignals(False)
+        self._refresh()
+
+    def _refresh(self):
+        codes = self.codes()
+        if codes == ["auto"]:
+            text = "Auto-detect (any language)"
+        elif not codes:
+            text = "Choose…"
+        else:
+            names = [languages.name(c) for c in codes]
+            text = ", ".join(names[:4]) + (f" +{len(names) - 4} more" if len(names) > 4 else "")
+        self.setText(text + "   ▾")
+        self.setToolTip(", ".join(f"{languages.name(c)} ({c})" for c in codes if c != "auto"))
+        self.changed.emit()
 
 
 class DropList(QListWidget):
@@ -104,25 +209,20 @@ class Window(QMainWindow):
         box = QGroupBox("2. Settings")
         form = QFormLayout(box)
 
-        self.spoken = QComboBox()
-        self.spoken.setEditable(True)
-        for label, codes in SPOKEN_PRESETS:
-            self.spoken.addItem(f"{label}  [{codes}]", codes)
-        self.spoken.setToolTip("Language codes, comma separated (e.g. ar,en).\n"
-                               "Naming the actual languages gives better results than auto-detect.")
+        self.spoken = LanguagePicker(languages.WHISPER, allow_auto=True)
         form.addRow("Spoken in clips:", self.spoken)
-        hint = QLabel("Tip: choosing the actual spoken language(s) gives better results than auto-detect.")
-        hint.setStyleSheet("color: gray")
-        form.addRow("", hint)
+        self.spoken_hint = QLabel()
+        self.spoken_hint.setWordWrap(True)
+        form.addRow("", self.spoken_hint)
+        self.spoken.changed.connect(self.update_hints)
 
-        targets = QHBoxLayout()
-        self.t_en, self.t_da = QCheckBox("English"), QCheckBox("Danish")
-        self.t_other = QLineEdit()
-        self.t_other.setPlaceholderText("other codes, e.g. de,fr")
-        targets.addWidget(self.t_en)
-        targets.addWidget(self.t_da)
-        targets.addWidget(self.t_other)
-        form.addRow("Subtitles in:", targets)
+        self.targets = LanguagePicker(languages.TARGETS)
+        form.addRow("Subtitles in:", self.targets)
+        self.targets_hint = QLabel()
+        self.targets_hint.setWordWrap(True)
+        form.addRow("", self.targets_hint)
+        self.targets.changed.connect(self.update_hints)
+        self.llm_ok = False
 
         self.llm_status = QLabel()
         recheck = QPushButton("Check again")
@@ -181,15 +281,12 @@ class Window(QMainWindow):
 
     def load_settings(self):
         s = self.settings
-        spoken = s.value("spoken", "ar,en")
-        i = self.spoken.findData(spoken)
-        if i >= 0:
-            self.spoken.setCurrentIndex(i)
-        else:
-            self.spoken.setEditText(spoken)
-        self.t_en.setChecked(s.value("t_en", True, bool))
-        self.t_da.setChecked(s.value("t_da", False, bool))
-        self.t_other.setText(s.value("t_other", ""))
+        self.spoken.set_codes(_split(s.value("spoken", "ar,en")))
+        targets = s.value("targets", None)
+        if targets is None:  # settings from 0.2.0
+            targets = ",".join([c for c, k, d in (("en", "t_en", True), ("da", "t_da", False))
+                                if s.value(k, d, bool)] + _split(s.value("t_other", "")))
+        self.targets.set_codes(_split(targets))
         self.channel.setCurrentIndex(max(0, self.channel.findData(s.value("channel", "mix"))))
         self.f_srt.setChecked(s.value("f_srt", True, bool))
         self.f_avid.setChecked(s.value("f_avid", False, bool))
@@ -198,29 +295,45 @@ class Window(QMainWindow):
 
     def save_settings(self):
         s = self.settings
-        s.setValue("spoken", self.spoken_codes())
-        s.setValue("t_en", self.t_en.isChecked())
-        s.setValue("t_da", self.t_da.isChecked())
-        s.setValue("t_other", self.t_other.text())
+        s.setValue("spoken", ",".join(self.spoken.codes()))
+        s.setValue("targets", ",".join(self.targets.codes()))
         s.setValue("channel", self.channel.currentData())
         s.setValue("f_srt", self.f_srt.isChecked())
         s.setValue("f_avid", self.f_avid.isChecked())
         s.setValue("note", self.note.text())
         s.setValue("out_dir", self.out_dir or "")
 
-    def spoken_codes(self) -> str:
-        i = self.spoken.currentIndex()
-        if i >= 0 and self.spoken.itemText(i) == self.spoken.currentText():
-            return self.spoken.itemData(i)
-        text = self.spoken.currentText()
-        if "[" in text and "]" in text:
-            text = text[text.index("[") + 1:text.index("]")]
-        return ",".join(c.strip().lower() for c in text.split(",") if c.strip())
+    def update_hints(self):
+        spoken = self.spoken.codes()
+        if spoken == ["auto"]:
+            self.spoken_hint.setText("Auto-detect is less accurate. Tick the language(s) people "
+                                     "actually speak if you know them.")
+            self.spoken_hint.setStyleSheet("color: #b36b00")
+        elif len(spoken) > 1:
+            self.spoken_hint.setText("Tick only languages that are really spoken. "
+                                     "If it's just one, one tick gives the best result.")
+            self.spoken_hint.setStyleSheet("color: gray")
+        else:
+            self.spoken_hint.setText("Tip: setting the spoken language gives better results "
+                                     "than auto-detect.")
+            self.spoken_hint.setStyleSheet("color: gray")
+        others = [languages.name(c) for c in self.targets.codes() if c != "en"]
+        if others and not self.llm_ok:
+            listed = " and ".join(filter(None, [", ".join(others[:-1]), others[-1]]))
+            verb = "need" if len(others) > 1 else "needs"
+            self.targets_hint.setText(f"{listed} {verb} the high-quality translator "
+                                      "(Ollama), which isn't running.")
+            self.targets_hint.setStyleSheet("color: #b36b00")
+            self.targets_hint.show()
+        else:
+            self.targets_hint.hide()
 
     # ---------------------------------------------------------------- actions
 
     def check_llm(self):
-        if translate.available():
+        self.llm_ok = translate.available()
+        self.update_hints()
+        if self.llm_ok:
             self.llm_status.setText(f"Local LLM ready ({translate.DEFAULT_MODEL}) — any language")
             self.llm_status.setStyleSheet("color: green")
         else:
@@ -242,17 +355,18 @@ class Window(QMainWindow):
 
     def start(self):
         files = self.files.paths()
-        targets = ([c for c, box in (("en", self.t_en), ("da", self.t_da)) if box.isChecked()]
-                   + [c.strip().lower() for c in self.t_other.text().split(",") if c.strip()])
+        targets = self.targets.codes()
         formats = [f for f, box in (("srt", self.f_srt), ("avid", self.f_avid)) if box.isChecked()]
         if not files:
             return self.say("Add some clips first.")
+        if not self.spoken.codes():
+            return self.say("Choose the spoken language(s), or auto-detect.")
         if not targets:
             return self.say("Choose at least one subtitle language.")
         if not formats:
             return self.say("Choose at least one NLE format.")
         self.save_settings()
-        opts = Options(targets=targets, spoken=self.spoken_codes().split(","),
+        opts = Options(targets=targets, spoken=self.spoken.codes(),
                        channel=self.channel.currentData(), formats=formats,
                        note=self.note.text().strip(),
                        out_dir=Path(self.out_dir) if self.out_dir else None,
@@ -285,6 +399,13 @@ class Window(QMainWindow):
             return
         self.save_settings()
         e.accept()
+
+
+def _split(codes) -> list[str]:
+    # QSettings may hand back "ar,en" as a string or as a list, depending on quoting.
+    if isinstance(codes, str):
+        codes = codes.split(",")
+    return [c.strip().lower() for c in codes or [] if c.strip()]
 
 
 def main() -> int:

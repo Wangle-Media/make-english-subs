@@ -7,6 +7,7 @@ import urllib.error
 import urllib.request
 from typing import Callable
 
+from . import languages
 from .shape import Cue
 
 DEFAULT_MODEL = "gemma3:12b"
@@ -14,18 +15,12 @@ HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 if not HOST.startswith("http"):
     HOST = "http://" + HOST
 
-LANGUAGE_NAMES = {  # display names; any Whisper/ISO code also works
-    "ar": "Arabic", "da": "Danish", "de": "German", "en": "English", "es": "Spanish",
-    "fi": "Finnish", "fr": "French", "he": "Hebrew", "it": "Italian", "nl": "Dutch",
-    "no": "Norwegian", "pl": "Polish", "pt": "Portuguese", "sv": "Swedish", "tr": "Turkish",
-    "uk": "Ukrainian", "ru": "Russian", "fa": "Persian", "ku": "Kurdish",
-}
 BATCH = 40
 CONTEXT = 6
 
 
 def language_name(code: str) -> str:
-    return LANGUAGE_NAMES.get(code, code)
+    return languages.name(code)
 
 
 def _call(path: str, payload: dict | None = None, timeout: float = 1800):

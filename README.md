@@ -43,11 +43,13 @@ When it finishes you have a **MakeSubs** shortcut on the desktop (Windows) or in
 ## Using it
 
 1. Drag clips (or whole folders) into the window.
-2. **Spoken in clips**: choose the language(s) people actually speak.
+2. **Spoken in clips**: click the button and tick the language(s) people actually speak.
+   Type in the search box to find a language quickly; clicking its name ticks it.
    **Setting the language gives better results than auto-detect.** If only one language is
-   spoken, choose just that one. Use *Auto-detect* only when you really don't know.
-3. **Subtitles in**: English, Danish, or other language codes (`de`, `fr`, `sv`, ...).
-   Anything other than English needs the high-quality translator.
+   spoken, tick just that one. Use *Don't know (auto-detect)* only when you really don't know.
+3. **Subtitles in**: tick English, Danish or any other language in the same way.
+   Anything other than English needs the high-quality translator; the window warns you if it
+   isn't running.
 4. **Audio**: *Mix all channels* is fine for camera scratch audio. If one channel is clearly
    better (e.g. a boom on channel 1), pick it.
 5. **For NLE**: `.srt` for Premiere/Resolve, SubCap for Avid (or both).
