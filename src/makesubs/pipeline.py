@@ -38,7 +38,8 @@ class Options:
 class Job:
     info: MediaInfo
     transcript: asr.Transcript | None = None
-    source_cues: list[Cue] = field(default_factory=list)
+    speech_cues: list[Cue] = field(default_factory=list)  # timed to the speech itself
+    source_cues: list[Cue] = field(default_factory=list)  # on-screen timing (finalized)
     outputs: list[Path] = field(default_factory=list)
     error: str | None = None
 
@@ -169,6 +170,7 @@ def run(files: list[Path], opts: Options, progress: Progress = print) -> list[Jo
                 cues = build_cues(job.transcript.source)
                 for c in cues:
                     c.flagged = c.confidence < opts.flag_threshold
+                job.speech_cues = cues
                 job.source_cues = finalize(cues, job.info.fps)
                 _write(job, opts, "transcript", job.source_cues)
                 progress(f"  done in {time.time() - t0:.0f}s")
@@ -189,8 +191,11 @@ def run(files: list[Path], opts: Options, progress: Progress = print) -> list[Jo
             for target in opts.targets:
                 if translator == "llm":
                     draft = " ".join(s.text for s in draft_segs) or None
-                    cues = translate.translate_cues(job.source_cues, target, opts.llm_model,
+                    # Translate speech-timed cues and finalize afterwards, so the reading time
+                    # is worked out from the translated text, which usually runs longer.
+                    cues = translate.translate_cues(job.speech_cues, target, opts.llm_model,
                                                     draft, opts.note, progress)
+                    cues = finalize(cues, job.info.fps)
                 else:  # Whisper's own English translation, with its own timing
                     cues = build_cues(draft_segs)
                     _flag_overlapping(cues, job.source_cues, opts.flag_threshold)

@@ -9,7 +9,7 @@ from makesubs.asr import Segment, Word, _drop_repeated_tail
 from makesubs.audio import load_audio
 from makesubs.pipeline import Options, output_path, planned_outputs
 from makesubs.probe import probe
-from makesubs.shape import MAX_LINE, Cue, build_cues, finalize, wrap
+from makesubs.shape import LINGER, MAX_LINE, READING_CPS, Cue, build_cues, finalize, wrap
 from makesubs.timecode import FrameRate, frames_to_tc, seconds_to_frames, tc_to_frames
 from makesubs.writers import write_srt, write_subcap
 
@@ -82,6 +82,31 @@ def test_finalize_frame_accurate_with_gaps():
     for a, b in zip(out, out[1:]):
         assert seconds_to_frames(b.start, NDF24) - seconds_to_frames(a.end, NDF24) >= 2
         assert a.end > a.start
+
+
+def test_finalize_lingers_after_speech():
+    out = finalize([Cue(1.0, 3.0, "short line", "en", 1)], None)
+    assert out[0].end == pytest.approx(3.0 + LINGER)
+
+
+def test_finalize_long_text_stays_up_long_enough_to_read():
+    text = "x" * 84  # two full lines
+    out = finalize([Cue(1.0, 2.0, text, "en", 1)], None)
+    assert out[0].end == pytest.approx(1.0 + 84 / READING_CPS)
+
+
+def test_finalize_closes_short_gaps_but_never_overlaps():
+    cues = [Cue(0.0, 2.0, "a b c", "en", 1), Cue(3.0, 3.5, "d e f", "en", 1),
+            Cue(3.6, 5.0, "g h i", "en", 1), Cue(20.0, 21.0, "j", "en", 1)]
+    out = finalize(cues, NDF24)
+    frame = 1 / float(NDF24.rate)
+    # gap after linger would be 0.3 s: closed to the 2-frame minimum
+    assert out[1].start - out[0].end == pytest.approx(2 * frame, abs=1e-6)
+    # next cue starts 0.1 s after speech: cue ends 2 frames before it, not later
+    assert out[2].start - out[1].end == pytest.approx(2 * frame, abs=1e-6)
+    # plenty of room: plain linger, starts untouched
+    assert out[2].end == pytest.approx(5.0 + LINGER, abs=frame)
+    assert [c.start for c in out] == pytest.approx([0.0, 3.0, 3.6, 20.0], abs=frame)
 
 
 def test_writers(tmp_path):
