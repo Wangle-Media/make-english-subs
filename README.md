@@ -169,12 +169,12 @@ Existing subtitle files are never replaced unless you tick *Replace existing sub
 
 ### Following the script
 
-The script is read for its dialogue, scene by scene. For each clip, MakeSubs compares a rough
-English translation of what was said with the script and picks the scene with the most key
-words in common (names, places, unusual words). Then, in two steps:
+The script is read for its dialogue, scene by scene. For each clip, in two steps:
 
 1. Every line is translated from what was said, without the script, so the script can't pull
-   the translation towards what the actor was supposed to say.
+   the translation towards what the actor was supposed to say. MakeSubs then compares the
+   English translation with the script and picks the scene with the most key words in common
+   (names, places, unusual words).
 2. The translations are compared with that scene's script: for every line the translator
    decides whether the actor said it **as scripted**, **changed** it, or said something **not
    in the script**.
@@ -410,8 +410,8 @@ all clips succeeded and 1 if any failed, so it can be used in scripts.
 - **Scripts**: PDFs are read from where each piece of text sits on the page, which works for
   standard screenplay formatting from Final Draft, WriterDuet, Word and the like, but not for
   scanned pages or side-by-side (dual) dialogue (the `.fdx` handles those). Finding the scene
-  relies on Whisper's rough English, so it works best when the script is in English; for a
-  script in another language, pick the scene. The translator decides what counts as "as
+  uses the English translation, so it works best when the script is in English and English is
+  one of the subtitle languages; otherwise, pick the scene. The translator decides what counts as "as
   scripted" and leans towards "changed" when unsure, so check `review.txt` on important
   scenes.
 - **Camera-original raw formats** (BRAW, R3D, ARRIRAW) aren't supported; use the transcodes.

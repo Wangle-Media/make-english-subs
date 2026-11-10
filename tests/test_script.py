@@ -413,3 +413,31 @@ def test_each_batch_sees_only_its_own_part_of_the_draft(monkeypatch):
     translate.translate_cues(cues, "en", draft=draft, progress=lambda s: None)
     assert "Action!" in seen[0] and "Something is off" not in seen[0]
     assert "Something is off." in seen[-1] and "Action!" not in seen[-1]
+
+
+def test_one_sentence_said_over_two_subtitles_is_not_repeated(monkeypatch):
+    ref = translate.ScriptRef([("S1", "ELIAS", "I also made baklava."),
+                               ("S2", "ALIA", "When did you have time?")], "en")
+    said = ["I also made...", "Baklava, made it.", "When did you find time?"]
+    _fake_model(monkeypatch, {}, lambda t: "same")
+    cues = [Cue(i, i + 1, t, "en", 0.9) for i, t in enumerate(said)]
+    translate.compare_script(cues, ref, "en", progress=lambda s: None)
+    # both say part of S1, which can't be split: they keep their own words, not S1 twice
+    assert [c.text for c in cues] == ["I also made...", "Baklava, made it.", "When did you have time?"]
+    assert [c.script_ref for c in cues] == ["S1", "S1", "S2"]
+
+
+def test_scene_is_found_from_the_translation_when_whisper_cannot_translate(
+        clip, fake_engines, tmp_path, monkeypatch):
+    """Dialect-tuned Whisper models often hand back Arabic for the English draft."""
+    source = [_segment("الأوراق لو سمحت انزلوا كلكم من السيارة", 0.2, "ar"),
+              _segment("رايحين على عرس ابن عمي كريم في نابلس", 4.0, "ar"),
+              _segment("يلا بسرعة", 9.5, "ar")]
+    monkeypatch.setattr(pipeline.asr, "transcribe",
+                        lambda *a: Transcript(source, source, ["ar"]))  # "draft" is Arabic too
+    opts = Options(targets=["en"], spoken=["ar"], script=DATA / "screenplay.pdf",
+                   out_dir=tmp_path, overwrite=True)
+    job = pipeline.run([clip], opts, lambda s: None)[0]
+    assert not job.error, job.error
+    assert job.script_match and job.script_match.scenes[0].number == "2"
+    assert "<reference>" not in fake_engines[0]  # no Arabic passed off as an English reference
