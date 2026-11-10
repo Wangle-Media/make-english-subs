@@ -52,6 +52,16 @@ class Transcript:
     source: list[Segment]                 # in the spoken language(s)
     english: list[Segment] | None = None  # Whisper's own translation, if requested
     languages: list[str] = field(default_factory=list)
+    chunks: list[tuple[int, int, str]] = field(default_factory=list)  # (start, end sample, lang)
+
+
+# Dialect-tuned speech models. They hear their language's dialects much better than the
+# general model, but can't translate or write other languages (English crew talk comes out
+# in Arabic letters), so they only transcribe the stretches detected as their language.
+DIALECTS = {
+    "levantine": ("ar", "HebArabNlpProject/WhisperLevantine",
+                  "Levantine Arabic (Palestinian, Lebanese, Syrian, Jordanian)"),
+}
 
 
 # ---------------------------------------------------------------- engines
@@ -266,7 +276,9 @@ def _drop_repeated_tail(prev: list[Segment], new: list[Segment]) -> None:
 
 
 def transcribe(engine: Engine, audio: np.ndarray, spoken: list[str], want_english: bool,
-               progress: Progress = print) -> Transcript:
+               progress: Progress = print, later: frozenset[str] = frozenset()) -> Transcript:
+    """Speech in the languages in `later` is not transcribed here (only translated, for the
+    English draft): retranscribe() does it afterwards with a dialect model."""
     # Shorter chunks localise language switches better; longer ones give Whisper more context.
     multilingual = spoken == ["auto"] or len(spoken) > 1
     chunks = speech_chunks(audio, max_len=15.0 if multilingual else 25.0)
@@ -283,7 +295,7 @@ def transcribe(engine: Engine, audio: np.ndarray, spoken: list[str], want_englis
         progress(f"  chunk {i}/{len(chunks)} [{c.lang}] {c.start / SAMPLE_RATE:.1f}s")
         piece = audio[c.start:c.end]
         t0 = c.start / SAMPLE_RATE
-        segs = _offset(engine.run(piece, c.lang, "transcribe"), t0)
+        segs = [] if c.lang in later else _offset(engine.run(piece, c.lang, "transcribe"), t0)
         _drop_repeated_tail(source, segs)
         source += segs
         if english is not None:
@@ -294,4 +306,21 @@ def transcribe(engine: Engine, audio: np.ndarray, spoken: list[str], want_englis
             _drop_repeated_tail(english, en)
             english += en
     langs = list(dict.fromkeys(c.lang for c in chunks))
-    return Transcript(source, english, langs)
+    return Transcript(source, english, langs, [(c.start, c.end, c.lang) for c in chunks])
+
+
+def retranscribe(engine: Engine, audio: np.ndarray, transcript: Transcript, langs: set[str],
+                 progress: Progress = print) -> None:
+    """Transcribe the stretches in `langs` with `engine` (a dialect model), in place."""
+    todo = [c for c in transcript.chunks if c[2] in langs]
+    source: list[Segment] = []
+    for start, end, lang in transcript.chunks:
+        t0, t1 = start / SAMPLE_RATE, end / SAMPLE_RATE
+        if lang in langs:
+            progress(f"  chunk {todo.index((start, end, lang)) + 1}/{len(todo)} [{lang}] {t0:.1f}s")
+            segs = _offset(engine.run(audio[start:end], lang, "transcribe"), t0)
+        else:
+            segs = [s for s in transcript.source if t0 - 0.01 <= s.start < t1]
+        _drop_repeated_tail(source, segs)
+        source += segs
+    transcript.source = source

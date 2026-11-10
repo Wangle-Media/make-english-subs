@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from . import __version__, translate
+from .asr import DIALECTS
 from .audio import channel_choices
 from .pipeline import Options, run
 from .probe import probe
@@ -77,6 +78,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-marks", action="store_true", help="don't put [?] in subtitle text")
     p.add_argument("--backend", choices=["auto", "faster-whisper", "mlx"], default="auto")
     p.add_argument("--whisper-model", help="override speech model (default large-v3)")
+    p.add_argument("--dialect", choices=sorted(DIALECTS),
+                   help="dialect speech model for one language, used for the speech detected "
+                        "in that language: " + "; ".join(
+                            f"{k} = {v[2]}" for k, v in sorted(DIALECTS.items())))
     p.add_argument("--info", action="store_true", help="only show clip metadata and channels")
     p.add_argument("--setup", action="store_true",
                    help="download the speech model (and translation model, if Ollama runs), then exit")
@@ -102,6 +107,13 @@ def setup(args) -> int:
               "On a PC with an NVIDIA card, update the graphics driver from nvidia.com "
               "and run the installer again.")
     engine.unload()
+    if args.dialect:
+        lang, model, name = DIALECTS[args.dialect]
+        print(f"Downloading/checking the {name} speech model (about 6 GB the first time)...")
+        engine = create_engine("faster-whisper", model)
+        engine.run(noise, lang, "transcribe")
+        print(f"OK: {engine.name}")
+        engine.unload()
     if translate.available():
         translate.ensure_model(args.llm_model)
         print(f"OK: translation model {args.llm_model}")
@@ -144,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         llm_model=args.llm_model, note=args.note, channel=args.channel, formats=args.format,
         avid_start=args.avid_start, out_dir=args.out, overwrite=args.overwrite,
         flag_threshold=args.threshold, mark_flagged=not args.no_marks,
-        backend=args.backend, whisper_model=args.whisper_model,
+        backend=args.backend, whisper_model=args.whisper_model, dialect=args.dialect,
         script=args.script, scenes=args.scene)
     try:
         jobs = run(args.clips, opts)

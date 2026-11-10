@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import asr, translate
+from . import asr, languages, translate
 from . import script as screenplay
 from .audio import load_audio
 from .probe import MediaInfo, probe
@@ -33,6 +33,7 @@ class Options:
     mark_flagged: bool = True
     backend: str = "auto"
     whisper_model: str | None = None
+    dialect: str | None = None        # dialect speech model for one language, see asr.DIALECTS
     script: Path | None = None        # screenplay (.fdx/.pdf) for the translator to follow
     scenes: list[str] = field(default_factory=list)  # script scene numbers; [] = find per clip
 
@@ -78,6 +79,14 @@ def validate(opts: Options) -> str:
                            "is not running. Start Ollama, or leave the script out.")
     if opts.scenes and not opts.script:
         raise RuntimeError("Scene numbers only work together with a script.")
+    if opts.dialect:
+        if opts.dialect not in asr.DIALECTS:
+            raise RuntimeError(f"Unknown dialect model {opts.dialect!r}; choose from "
+                               + ", ".join(asr.DIALECTS))
+        lang = asr.DIALECTS[opts.dialect][0]
+        if lang not in opts.spoken and opts.spoken != ["auto"]:
+            raise RuntimeError(f"The {opts.dialect} model is for {languages.name(lang)}, which "
+                               "isn't among the spoken languages.")
     return tr
 
 
@@ -245,6 +254,8 @@ def run(files: list[Path], opts: Options, progress: Progress = print) -> list[Jo
 
     # Phase 1: speech recognition for every clip (Whisper in memory).
     want_draft = "en" in opts.targets or translator == "llm"
+    dialect_lang, dialect_model, dialect_name = asr.DIALECTS[opts.dialect] if opts.dialect         else (None, None, None)
+    later = frozenset({dialect_lang}) if dialect_lang else frozenset()
     progress("Loading speech recognition model (first run downloads ~3 GB)...")
     engine = asr.create_engine(opts.backend, opts.whisper_model)
     progress(f"Using {engine.name}")
@@ -254,19 +265,46 @@ def run(files: list[Path], opts: Options, progress: Progress = print) -> list[Jo
             progress(f"Transcribing {job.info.path.name}")
             try:
                 audio = load_audio(job.info, opts.channel)
-                job.transcript = asr.transcribe(engine, audio, opts.spoken, want_draft, progress)
-                cues = build_cues(job.transcript.source)
-                for c in cues:
-                    c.flagged = c.confidence < opts.flag_threshold
-                job.speech_cues = cues
-                job.source_cues = finalize(cues, job.info.fps)
-                _write(job, opts, "transcript", job.source_cues)
+                job.transcript = asr.transcribe(engine, audio, opts.spoken, want_draft, progress,
+                                                later)
                 progress(f"  done in {time.time() - t0:.0f}s")
             except Exception as e:  # noqa: BLE001
                 job.error = str(e)
                 progress(f"ERROR {job.info.path.name}: {e}")
     finally:
         engine.unload()
+
+    # Phase 1b: the dialect model transcribes the stretches in its language (one model in
+    # memory at a time).
+    pending = [j for j in jobs if j.transcript and not j.error
+               and any(c[2] == dialect_lang for c in j.transcript.chunks)]
+    if pending:
+        progress(f"Loading the {dialect_name} speech model (first run downloads ~6 GB)...")
+        engine = asr.create_engine("faster-whisper", dialect_model)
+        progress(f"Using {engine.name}")
+        try:
+            for job in pending:
+                t0 = time.time()
+                progress(f"Transcribing the {languages.name(dialect_lang)} in {job.info.path.name}")
+                try:
+                    audio = load_audio(job.info, opts.channel)
+                    asr.retranscribe(engine, audio, job.transcript, {dialect_lang}, progress)
+                    progress(f"  done in {time.time() - t0:.0f}s")
+                except Exception as e:  # noqa: BLE001
+                    job.error = str(e)
+                    progress(f"ERROR {job.info.path.name}: {e}")
+        finally:
+            engine.unload()
+
+    for job in jobs:
+        if job.error or job.transcript is None:
+            continue
+        cues = build_cues(job.transcript.source)
+        for c in cues:
+            c.flagged = c.confidence < opts.flag_threshold
+        job.speech_cues = cues
+        job.source_cues = finalize(cues, job.info.fps)
+        _write(job, opts, "transcript", job.source_cues)
 
     # Phase 2: translation (LLM in memory, Whisper unloaded).
     if translator == "llm":
