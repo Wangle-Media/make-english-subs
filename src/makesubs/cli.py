@@ -31,7 +31,8 @@ def script_info(path: Path) -> int:
     print()
     for s in sc.scenes:
         who = ", ".join(dict.fromkeys(ln.character for ln in s.lines))
-        print(f"{s.label:<14} {s.heading[:48]:<48}  {len(s.lines):>3} lines  {who}")
+        n = f"{len(s.lines)} line" + ("" if len(s.lines) == 1 else "s")
+        print(f"{s.label:<14} {s.heading[:48]:<48}  {n:>9}  {who}")
     first = sc.scenes[0]
     print(f"\nFirst lines of {first.label}, to check the dialogue was read correctly:")
     for ln in first.lines[:3]:
