@@ -15,6 +15,30 @@ def _codes(value: str) -> list[str]:
     return [c.strip().lower() for c in value.split(",") if c.strip()]
 
 
+def _scene_list(value: str) -> list[str]:
+    return [c.strip() for c in value.split(",") if c.strip()]
+
+
+def script_info(path: Path) -> int:
+    from . import script as screenplay
+    try:
+        sc = screenplay.load(path)
+    except RuntimeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    print(sc.summary())
+    print(f"Characters: {', '.join(sc.characters)}")
+    print()
+    for s in sc.scenes:
+        who = ", ".join(dict.fromkeys(ln.character for ln in s.lines))
+        print(f"{s.label:<14} {s.heading[:48]:<48}  {len(s.lines):>3} lines  {who}")
+    first = sc.scenes[0]
+    print(f"\nFirst lines of {first.label}, to check the dialogue was read correctly:")
+    for ln in first.lines[:3]:
+        print(f"  {ln.character}: {ln.text}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="makesubs",
@@ -31,6 +55,14 @@ def build_parser() -> argparse.ArgumentParser:
                         "English only; auto = llm if Ollama is running (default)")
     p.add_argument("--llm-model", default=translate.DEFAULT_MODEL, help="Ollama model name")
     p.add_argument("--note", default="", help="names/places/terms to help translation")
+    p.add_argument("--script", type=Path, metavar="FILE",
+                   help="screenplay (.fdx or .pdf): where actors say a scripted line, the "
+                        "subtitle follows the script's wording (needs Ollama)")
+    p.add_argument("--scene", default="", type=_scene_list, metavar="N",
+                   help="script scene number(s) of the clips, e.g. 23 or 23,24 "
+                        "(default: found per clip)")
+    p.add_argument("--script-info", action="store_true",
+                   help="only show what MakeSubs reads from --script, to check it")
     p.add_argument("-c", "--channel", default="mix",
                    help="audio channel to use: 'mix' or a channel number (see --info)")
     p.add_argument("-f", "--format", default="srt", type=_codes,
@@ -82,6 +114,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.setup:
         return setup(args)
+    if args.script_info:
+        if not args.script:
+            parser.error("--script-info needs --script FILE")
+        return script_info(args.script)
     if not args.clips:
         parser.error("give at least one clip")
     missing = [c for c in args.clips if not c.is_file()]
@@ -107,7 +143,8 @@ def main(argv: list[str] | None = None) -> int:
         llm_model=args.llm_model, note=args.note, channel=args.channel, formats=args.format,
         avid_start=args.avid_start, out_dir=args.out, overwrite=args.overwrite,
         flag_threshold=args.threshold, mark_flagged=not args.no_marks,
-        backend=args.backend, whisper_model=args.whisper_model)
+        backend=args.backend, whisper_model=args.whisper_model,
+        script=args.script, scenes=args.scene)
     try:
         jobs = run(args.clips, opts)
     except RuntimeError as e:

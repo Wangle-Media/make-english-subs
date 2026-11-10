@@ -1,6 +1,4 @@
 import hashlib
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -122,18 +120,6 @@ def test_writers(tmp_path):
     body = raw.decode("utf-8-sig")
     assert "<begin subtitles>" in body and "<end subtitles>" in body
     assert "09:59:59;00 10:00:00;15" in body  # 1.0s -> +30 frames; 2.5s -> +75 frames
-
-
-@pytest.fixture(scope="module")
-def clip(tmp_path_factory):
-    if not shutil.which("ffmpeg"):
-        pytest.skip("ffmpeg not installed")
-    path = tmp_path_factory.mktemp("media") / "A001C001.mov"
-    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25",
-                    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
-                    "-t", "3", "-ac", "2", "-c:v", "mpeg4", "-c:a", "pcm_s16le",
-                    "-timecode", "10:00:00:00", str(path)], check=True)
-    return path
 
 
 def test_probe_and_audio_leave_source_untouched(clip):

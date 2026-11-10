@@ -98,6 +98,16 @@ better (e.g. a boom on channel 1), pick it.
 **Notes**: names of characters, places and special terms, e.g.
 `Characters: Nidal, Yasmin. Places: Jenin, Nablus.` This helps the translator spell them right.
 
+**Script** (optional, needs the high-quality translator): click **Choose…** and pick the
+screenplay, as a Final Draft file (`.fdx`, most reliable) or a PDF. Where an actor says a
+scripted line, the subtitle then uses the script's wording; lines the actor changed or
+improvised are translated as spoken, and listed in `review.txt` next to the script line. See
+[Following the script](#following-the-script). **None** switches it off.
+
+**Scene number(s)**: leave empty and MakeSubs finds the scene for each clip itself. If all
+the clips you're adding are from one scene (or a few), type the number(s), e.g. `23` or
+`23,24`, to be sure.
+
 **Save to**: *Next to each clip* by default. Click **Choose…** to put all subtitle files in one
 folder instead, and **Next to clips** to go back.
 
@@ -148,9 +158,57 @@ For `A001C003.mov`, next to the clip (or in the folder you chose):
 | `A001C003.transcript.srt` | What was said, in the original language(s) |
 | `A001C003.en.srt`, `A001C003.da.srt`, ... | Translations |
 | `*.avid.txt` | The same, as Avid SubCap files (if selected) |
-| `A001C003.review.txt` | Languages detected, and every line that needs checking, with source timecode |
+| `A001C003.review.txt` | Languages detected, and every line that needs checking, with source timecode; with a script, also the lines that differ from it |
 
 Existing subtitle files are never replaced unless you tick *Replace existing subtitle files*.
+
+### Following the script
+
+The script is read for its dialogue, scene by scene. For each clip, MakeSubs compares a rough
+English translation of what was said with the script and picks the scene with the most key
+words in common (names, places, unusual words). The translator then sees that scene and
+decides for every line whether the actor said it **as scripted**, **changed** it, or said
+something **not in the script**:
+
+- As scripted: the subtitle uses the script's wording (when the script is in the subtitle
+  language; otherwise the script is used for the meaning and the spelling of names).
+- Changed or not in the script: translated as actually said. The subtitle shows what is in
+  the take, never script text that wasn't spoken.
+
+`review.txt` ends with what happened:
+
+```
+Script:      film.fdx, scene 2 EXT. CHECKPOINT - DAY
+             (found automatically, 73% of key words in common: cousin, papers, wedding, karim, nablus)
+             3 lines compared: 1 as scripted, 1 changed, 1 not in the script
+
+Lines that differ from the script (English subtitle, then the script line):
+10:00:04:00  changed  We're going to my cousin Karim's wedding in Nablus.
+             script:  NIDAL: We are going to my uncle's wedding in Nablus. My cousin Karim is getting married.
+10:00:09:13  none     Come on, hurry.
+```
+
+If no scene matches well enough (short clips, mostly improvised, very noisy audio), the clip is
+translated without the script and `review.txt` says so, with the best guess. Give the scene
+number to use the script anyway.
+
+Before the first run with a new script, check that MakeSubs reads it correctly (especially
+a PDF):
+
+```bash
+makesubs --script film.pdf --script-info
+```
+
+```
+Script film.pdf: 3 scenes, 9 lines of dialogue, 4 characters, English
+Characters: NIDAL, YASMIN, SOLDIER, KARIM
+
+scene 1        INT. KITCHEN - NIGHT                                3 lines  NIDAL, YASMIN
+scene 2        EXT. CHECKPOINT - DAY                               4 lines  SOLDIER, NIDAL, YASMIN
+...
+```
+
+If the scene count, the characters or the first lines look wrong, use the `.fdx` instead.
 
 ### Lines marked `[?]`
 
@@ -207,6 +265,10 @@ makesubs A001C003.mov --channel 1 --out ~/Desktop/subs
 
 # Help the translator spell names and places
 makesubs A001C003.mov --to en,da --note "Characters: Nidal, Yasmin. Places: Jenin, Nablus."
+
+# Follow the script (scene found per clip), or tell it the scene
+makesubs A001C003.mov --script film.fdx
+makesubs A001C003.mov A001C004.mov --script film.fdx --scene 23
 ```
 
 A whole day's clips (MakeSubs takes files, not folders, on the command line):
@@ -296,6 +358,9 @@ The timecode on each review line takes you straight to the spot in the source cl
 | `-c`, `--channel N` | `mix` | `mix` averages all audio, or a channel number as listed by `--info`. |
 | `-o`, `--out FOLDER` | next to clip | Write subtitle files into this folder (created if missing). |
 | `--note TEXT` | | Names, places and terms for the translator. |
+| `--script FILE` | | Screenplay (`.fdx` or `.pdf`) to follow, see [Following the script](#following-the-script). Needs the high-quality translator. |
+| `--scene N` | found per clip | Script scene number(s) of the clips, e.g. `23` or `23,24`. |
+| `--script-info` | | Only show what MakeSubs reads from `--script`. |
 | `--avid-start TC` | clip source TC | Sequence start timecode for SubCap files, e.g. `01:00:00:00`. |
 | `--overwrite` | off | Replace existing subtitle files (otherwise those clips are skipped). |
 | `--info` | | Only show each clip's timecode, frame rate, reel and audio channels. |
@@ -328,6 +393,11 @@ all clips succeeded and 1 if any failed, so it can be used in scripts.
 - **Language switches inside a sentence**: language is detected per stretch of speech (up to
   about 15 s), so a short phrase in a second language right next to the first may be written
   in the wrong language.
+- **Scripts**: PDFs are read from the page layout, which works for standard screenplay
+  formatting but not for scanned pages or side-by-side (dual) dialogue; use the `.fdx` when
+  you have it. Finding the scene relies on Whisper's rough English, so it works best when the
+  script is in English; for a script in another language, give the scene number. The
+  translator decides what counts as "as scripted", so check `review.txt` on important scenes.
 - **Camera-original raw formats** (BRAW, R3D, ARRIRAW) aren't supported; use the transcodes.
   Avid OP-Atom MXF stores audio in separate files: point MakeSubs at the audio MXF.
 
@@ -341,4 +411,5 @@ uv run makesubs-gui
 
 Code lives in `src/makesubs/`: `probe` (metadata), `audio` (decoding), `asr` (Whisper, voice
 activity detection, language detection), `shape` (cue timing and line breaks), `translate`
-(Ollama), `writers` (SRT and SubCap), `pipeline`, `cli`, `gui`.
+(Ollama), `script` (screenplay reading and scene matching), `writers` (SRT and SubCap),
+`pipeline`, `cli`, `gui`.

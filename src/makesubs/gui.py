@@ -152,7 +152,7 @@ class DropList(QListWidget):
             files = sorted(x for x in p.rglob("*") if x.is_file()) if p.is_dir() else [p]
             for f in files:
                 if str(f) not in have and not f.name.startswith(".") \
-                        and f.suffix.lower() not in (".srt", ".txt", ".xml", ".ale"):
+                        and f.suffix.lower() not in (".srt", ".txt", ".xml", ".ale", ".fdx", ".pdf"):
                     item = QListWidgetItem(f"{f.name}    —  {f.parent}")
                     item.setData(Qt.UserRole, str(f))
                     item.setToolTip(str(f))
@@ -187,6 +187,12 @@ class Worker(QObject):
                 if flagged:
                     self.log.emit(f"        {flagged} line{'s' if flagged > 1 else ''} marked [?] "
                                   f"to check, see {j.info.path.stem}.review.txt")
+                if j.script_match:
+                    differ = sum(c.script_match in ("changed", "none") for c in j.script_cues)
+                    self.log.emit(f"        followed the script ({j.script_match.label}); "
+                                  f"{differ} line{'' if differ == 1 else 's'} differ from it")
+                elif self.opts.script:
+                    self.log.emit("        no script scene found; give the scene number to use it")
                 self.folder.emit(str(Path(where).resolve()))
             self.finished.emit(bool(jobs) and not any(j.error for j in jobs))
         except Exception as e:  # noqa: BLE001 - show anything to the editor
@@ -259,6 +265,24 @@ class Window(QMainWindow):
         self.note.setPlaceholderText("Names, places, terms — helps the translator spell them right")
         form.addRow("Notes:", self.note)
 
+        scr = QHBoxLayout()
+        self.script_label = QLabel()
+        pick_script, no_script = QPushButton("Choose…"), QPushButton("None")
+        pick_script.clicked.connect(self.pick_script)
+        no_script.clicked.connect(lambda: self.set_script(None))
+        scr.addWidget(self.script_label, 1)
+        scr.addWidget(pick_script)
+        scr.addWidget(no_script)
+        form.addRow("Script:", scr)
+        self.scene = QLineEdit()
+        self.scene.setPlaceholderText("Scene number(s), e.g. 23 or 23,24. Leave empty to find "
+                                      "the scene for each clip automatically")
+        form.addRow("", self.scene)
+        self.script_hint = QLabel()
+        self.script_hint.setWordWrap(True)
+        form.addRow("", self.script_hint)
+        self.script: str | None = None
+
         out = QHBoxLayout()
         self.out_label = QLabel()
         choose, reset = QPushButton("Choose…"), QPushButton("Next to clips")
@@ -311,6 +335,8 @@ class Window(QMainWindow):
         self.f_srt.setChecked(s.value("f_srt", True, bool))
         self.f_avid.setChecked(s.value("f_avid", False, bool))
         self.note.setText(s.value("note", ""))
+        script = s.value("script", "") or None
+        self.set_script(script if script and Path(script).is_file() else None)
         self.set_out(s.value("out_dir", None) or None)
 
     def save_settings(self):
@@ -321,6 +347,7 @@ class Window(QMainWindow):
         s.setValue("f_srt", self.f_srt.isChecked())
         s.setValue("f_avid", self.f_avid.isChecked())
         s.setValue("note", self.note.text())
+        s.setValue("script", self.script or "")
         s.setValue("out_dir", self.out_dir or "")
 
     def update_hints(self):
@@ -347,8 +374,35 @@ class Window(QMainWindow):
             self.targets_hint.show()
         else:
             self.targets_hint.hide()
+        script = getattr(self, "script", None)
+        if script and not self.llm_ok:
+            self.script_hint.setText("Following the script needs the high-quality translator "
+                                     "(Ollama), which isn't running.")
+            self.script_hint.setStyleSheet("color: #b36b00")
+        elif script:
+            self.script_hint.setText("Where an actor says a scripted line, the subtitle follows "
+                                     "the script's wording. Changed and improvised lines are "
+                                     "translated as spoken and listed in review.txt.")
+            self.script_hint.setStyleSheet("color: gray")
+        if hasattr(self, "script_hint"):
+            self.script_hint.setVisible(bool(script))
+            self.scene.setEnabled(bool(script))
 
     # ---------------------------------------------------------------- actions
+
+    def pick_script(self):
+        f, _ = QFileDialog.getOpenFileName(self, "Choose the script", "",
+                                           "Screenplays (*.fdx *.pdf);;All files (*)")
+        if f:
+            self.set_script(f)
+
+    def set_script(self, path: str | None):
+        self.script = path
+        self.script_label.setText(Path(path).name if path else "None")
+        self.script_label.setToolTip(path or "")
+        if not path:
+            self.scene.clear()
+        self.update_hints()
 
     def check_llm(self):
         self.llm_ok = translate.available()
@@ -390,7 +444,9 @@ class Window(QMainWindow):
                        channel=self.channel.currentData(), formats=formats,
                        note=self.note.text().strip(),
                        out_dir=Path(self.out_dir) if self.out_dir else None,
-                       overwrite=self.overwrite.isChecked())
+                       overwrite=self.overwrite.isChecked(),
+                       script=Path(self.script) if self.script else None,
+                       scenes=[n.strip() for n in self.scene.text().split(",") if n.strip()])
         self.log.clear()
         self.result_dir = ""
         self.show_files.setEnabled(False)

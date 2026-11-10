@@ -30,6 +30,8 @@ class Cue:
     lang: str
     confidence: float
     flagged: bool = False
+    script_ref: str = ""     # script line it matched, e.g. "S4" (translation with a script)
+    script_match: str = ""   # "same", "changed" or "none"; "" when no script was used
 
 
 def _text(words: list[Word]) -> str:
