@@ -82,6 +82,16 @@ Type in the search box to find a language quickly; clicking its name ticks it.
 **Setting the language gives better results than auto-detect.** If only one language is
 spoken, tick just that one. Tick *Don't know — auto-detect* only when you really don't know.
 
+**Arabic speech** (shown when Arabic is ticked): *Standard model*, or the *Levantine Arabic
+dialect model* for Palestinian, Lebanese, Syrian and Jordanian Arabic. The dialect model
+([WhisperLevantine](https://huggingface.co/HebArabNlpProject/WhisperLevantine), Whisper large-v3
+fine-tuned on about 1,200 hours of Levantine Arabic) hears the dialect much better. On a
+Palestinian Arabic scene it got "You've been sleeping a lot" and "The olive trees have bloomed
+again" where the standard model heard "You're sleeping on it" and "Zatoun returned to Zahar".
+It can't write English or translate, so the standard model still detects the languages,
+writes the English, and makes the rough English draft; the dialect model then transcribes
+only the Arabic, in a second pass. The first run with it downloads about 6 GB.
+
 **Subtitles in**: tick English, Danish or any other language, the same way.
 
 **Translation** shows which translator will be used:
@@ -378,6 +388,7 @@ The timecode on each review line takes you straight to the spot in the source cl
 | `--avid-start TC` | clip source TC | Sequence start timecode for SubCap files, e.g. `01:00:00:00`. |
 | `--overwrite` | off | Replace existing subtitle files (otherwise those clips are skipped). |
 | `--info` | | Only show each clip's timecode, frame rate, reel and audio channels. |
+| `--dialect levantine` | standard | Dialect speech model for the Arabic, see *Arabic speech* above. With `--setup`, also downloads it. |
 | `--setup` | | Download the models now, then exit (the installer does this). |
 | `--version` | | Show the installed version. |
 

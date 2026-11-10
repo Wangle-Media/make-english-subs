@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__, languages, translate
+from .asr import DIALECTS
 from . import script as screenplay
 from .pipeline import Options, run
 
@@ -341,6 +342,21 @@ class Window(QMainWindow):
         form.addRow("", self.spoken_hint)
         self.spoken.changed.connect(self.update_hints)
 
+        # A dialect model per language, offered when that language is ticked.
+        self.dialect = QComboBox()
+        self.dialect.addItem("Standard model", None)
+        for key, (_lang, _model, name) in sorted(DIALECTS.items()):
+            self.dialect.addItem(f"{name}: dialect model", key)
+        self.dialect_label = QLabel("Arabic speech:")
+        form.addRow(self.dialect_label, self.dialect)
+        self.dialect_hint = QLabel("The dialect model hears Palestinian, Lebanese, Syrian and "
+                                   "Jordanian Arabic much better. It adds a second pass and a "
+                                   "one-time download of about 6 GB.")
+        self.dialect_hint.setWordWrap(True)
+        self.dialect_hint.setStyleSheet("color: gray")
+        form.addRow("", self.dialect_hint)
+        self.dialect.currentIndexChanged.connect(self.update_hints)
+
         self.targets = LanguagePicker(languages.TARGETS)
         form.addRow("Subtitles in:", self.targets)
         self.targets_hint = QLabel()
@@ -443,6 +459,7 @@ class Window(QMainWindow):
                                 if s.value(k, d, bool)] + _split(s.value("t_other", "")))
         self.targets.set_codes(_split(targets))
         self.channel.setCurrentIndex(max(0, self.channel.findData(s.value("channel", "mix"))))
+        self.dialect.setCurrentIndex(max(0, self.dialect.findData(s.value("dialect", "") or None)))
         self.f_srt.setChecked(s.value("f_srt", True, bool))
         self.f_avid.setChecked(s.value("f_avid", False, bool))
         self.note.setText(s.value("note", ""))
@@ -455,6 +472,7 @@ class Window(QMainWindow):
         s.setValue("spoken", ",".join(self.spoken.codes()))
         s.setValue("targets", ",".join(self.targets.codes()))
         s.setValue("channel", self.channel.currentData())
+        s.setValue("dialect", self.dialect.currentData() or "")
         s.setValue("f_srt", self.f_srt.isChecked())
         s.setValue("f_avid", self.f_avid.isChecked())
         s.setValue("note", self.note.text())
@@ -475,6 +493,11 @@ class Window(QMainWindow):
             self.spoken_hint.setText("Tip: setting the spoken language gives better results "
                                      "than auto-detect.")
             self.spoken_hint.setStyleSheet("color: gray")
+        if hasattr(self, "dialect"):
+            arabic = "ar" in spoken
+            for w in (self.dialect, self.dialect_label):
+                w.setVisible(arabic)
+            self.dialect_hint.setVisible(arabic and self.dialect.currentData() is not None)
         others = [languages.name(c) for c in self.targets.codes() if c != "en"]
         if others and not self.llm_ok:
             listed = " and ".join(filter(None, [", ".join(others[:-1]), others[-1]]))
@@ -592,7 +615,8 @@ class Window(QMainWindow):
                        out_dir=Path(self.out_dir) if self.out_dir else None,
                        overwrite=self.overwrite.isChecked(),
                        script=Path(self.script) if self.script else None,
-                       scenes=self.scene.scenes())
+                       scenes=self.scene.scenes(),
+                       dialect=self.dialect.currentData() if "ar" in self.spoken.codes() else None)
         self.log.clear()
         self.result_dir = ""
         self.show_files.setEnabled(False)
