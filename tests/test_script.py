@@ -10,6 +10,14 @@ from makesubs.asr import Segment, Transcript, Word
 from makesubs.pipeline import Options
 from makesubs.shape import Cue
 
+_REAL_MEANING = translate.meaning_matrix
+
+
+@pytest.fixture(autouse=True)
+def no_embeddings(monkeypatch):
+    """Tests match on words unless they set meanings themselves (no Ollama needed)."""
+    monkeypatch.setattr(translate, "meaning_matrix", lambda said, scripted: None)
+
 DATA = Path(__file__).parent / "data"
 
 # tests/data/screenplay.pdf was made from screenplay.fountain with screenplain (standard
@@ -144,9 +152,12 @@ def _answers(prompt: str, make) -> dict:
 
 def _fake_model(monkeypatch, said: dict, verdict, seen: list | None = None):
     """Translation prompts get said[number]; comparison prompts get verdict(subtitle)."""
-    def fake(model, prompt, num_ctx=8192):
+    def fake(model, prompt, num_ctx=8192, temperature=0.2):
         if seen is not None:
             seen.append(prompt)
+        if "\n\nLine: " in prompt:  # a single line, retried on its own
+            line = prompt.rsplit("Line: ", 1)[1]
+            return {"text": said.get(line, line)}
         items = json.loads(prompt.rsplit("\n\n", 1)[1])
         if "Each numbered item pairs" in prompt:
             return {k: verdict(v["said"]) for k, v in items.items()}
@@ -202,7 +213,7 @@ def test_compare_when_script_is_in_another_language(monkeypatch):
     ref = translate.ScriptRef([("S1", "NIDAL", "Er brødet klar?")], "da")
     p = translate._compare_prompt({"1": "x"}, ref, "en")
     assert "Danish" in p and "script's own wording" not in p
-    monkeypatch.setattr(translate, "_generate", lambda m, p, n=8192: _answers(
+    monkeypatch.setattr(translate, "_generate", lambda m, p, n=8192, t=0.2: _answers(
         p, lambda k, v: translate.parse_answer(
             {"text": "Er brødet klar?", "script": "S1", "match": "same"})))
     cues = [Cue(0, 1, "Is the bread ready?", "en", 0.9)]
@@ -221,7 +232,7 @@ def test_compare_ignores_lines_that_match_nothing(monkeypatch):
 
 
 def test_translate_without_script_is_unchanged(monkeypatch):
-    monkeypatch.setattr(translate, "_generate", lambda m, p, n=8192: _answers(
+    monkeypatch.setattr(translate, "_generate", lambda m, p, n=8192, t=0.2: _answers(
         p, lambda k, v: translate.parse_answer("Hello")))
     out = translate.translate_cues([Cue(0, 1, "مرحبا", "ar", 0.9)], "en", progress=lambda s: None)
     assert out[0].text == "Hello" and out[0].script_match == ""
@@ -394,9 +405,10 @@ def test_script_wording_for_a_line_split_over_subtitles(monkeypatch):
 
 
 def test_batches_are_even():
-    assert [len(r) for r in translate._batches(42)] == [21, 21]
-    assert [len(r) for r in translate._batches(40)] == [40]
-    assert [len(r) for r in translate._batches(81)] == [27, 27, 27]
+    assert [len(r) for r in translate._batches(42, 40)] == [21, 21]
+    assert [len(r) for r in translate._batches(40, 40)] == [40]
+    assert [len(r) for r in translate._batches(81, 40)] == [27, 27, 27]
+    assert [len(r) for r in translate._batches(42)] == [11, 11, 11, 9]  # default: 12 at most
     assert translate._batches(0) == []
 
 
@@ -405,8 +417,8 @@ def test_each_batch_sees_only_its_own_part_of_the_draft(monkeypatch):
     first sentences ("Action!") instead of from its own lines."""
     monkeypatch.setattr(translate, "BATCH", 2)
     seen = []
-    monkeypatch.setattr(translate, "_generate", lambda m, p, n=8192: seen.append(p) or _answers(
-        p, lambda k, v: translate.parse_answer("x")))
+    monkeypatch.setattr(translate, "_generate", lambda m, p, n=8192, temperature=0.2: seen.append(p)
+                        or _answers(p, lambda k, v: translate.parse_answer(f"line {len(seen)}.{k}")))
     draft = [Segment(0, 2, " Action!", "en", []), Segment(10, 12, " Hummus and vine leaves.", "en", []),
              Segment(30, 32, " Something is off.", "en", [])]
     cues = [Cue(0, 2, "أكشن", "ar", 0.9), Cue(10, 12, "حمص", "ar", 0.9), Cue(30, 32, "في اشي", "ar", 0.9)]
@@ -491,3 +503,108 @@ def test_a_fragment_keeps_its_translation(monkeypatch):
     cues = [Cue(0, 1, "Baklava.", "en", 0.9)]
     translate.compare_script(cues, ref, "en", progress=lambda s: None)
     assert (cues[0].text, cues[0].script_ref, cues[0].script_match) == ("Baklava.", "S1", "same")
+
+
+def test_a_line_answered_out_of_step_is_translated_again(monkeypatch):
+    """The model lost count: line 2's answer is line 3's (its anchor is line 3's first word)."""
+    source = ["كل شي هون حلو", "ما باعرف الياس", "واكلك زاكي"]
+    calls = []
+
+    def fake(model, prompt, num_ctx=8192, temperature=0.2):
+        if "\n\nLine: " in prompt:  # the retry, alone
+            calls.append(prompt.rsplit("Line: ", 1)[1])
+            return {"text": "I don't know, Elias."}
+        items = json.loads(prompt.rsplit("\n\n", 1)[1])
+        calls.append(items)
+        if len(items) == 3:  # the batch: line 2 answered with line 3's translation
+            return {"1": {"first": "كل", "text": "Everything here is nice."},
+                    "2": {"first": "واكلك", "text": "And your food is delicious."},
+                    "3": {"first": "واكلك", "text": "And your food is delicious."}}
+
+    monkeypatch.setattr(translate, "_generate_raw", fake)
+    cues = [Cue(i, i + 1, t, "ar", 0.9) for i, t in enumerate(source)]
+    out = translate.translate_cues(cues, "en", progress=lambda s: None)
+    assert [c.text for c in out] == ["Everything here is nice.", "I don't know, Elias.",
+                                     "And your food is delicious."]
+    assert calls[1:] == ["ما باعرف الياس"]  # only the wrong line again, on its own
+
+
+def test_arabic_labelled_english_is_still_translated(monkeypatch):
+    seen = []
+
+    def fake(model, prompt, num_ctx=8192, temperature=0.2):
+        items = json.loads(prompt.rsplit("\n\n", 1)[1])
+        seen.append(items)
+        return {k: {"first": v.split()[0], "text": "I made baklava too."} for k, v in items.items()}
+
+    monkeypatch.setattr(translate, "_generate_raw", fake)
+    cues = [Cue(0, 1, "Action!", "en", 0.9), Cue(1, 2, "وكمان عملت بقلاوه", "en", 0.9)]
+    out = translate.translate_cues(cues, "en", progress=lambda s: None)
+    assert [c.text for c in out] == ["Action!", "I made baklava too."]
+    assert seen == [{"1": "وكمان عملت بقلاوه"}]
+
+
+def test_an_answer_left_in_arabic_is_not_used(monkeypatch):
+    monkeypatch.setattr(translate, "_generate_raw", lambda m, p, n=8192, t=0.2: {
+        "1": {"first": "انا", "text": "انا ظليت وقت"}, "text": "انا ظليت وقت"})  # always copied
+    out = translate.translate_cues([Cue(0, 1, "انا ظليت وقت", "ar", 0.9)], "en",
+                                   progress=lambda s: None)
+    assert out[0].flagged and out[0].text == "انا ظليت وقت"  # kept and marked for review
+
+
+def test_a_server_error_costs_one_request_not_the_clip(monkeypatch):
+    import io
+    import urllib.error
+    attempts = []
+
+    def failing(path, payload=None, timeout=1800):
+        attempts.append(payload)
+        raise urllib.error.HTTPError("http://x", 500, "Internal Server Error", {}, io.BytesIO())
+
+    monkeypatch.setattr(translate, "_call", failing)
+    assert translate._generate_raw("m", "prompt") == {}
+    assert len(attempts) == 3  # tried again, then gave up on this request only
+
+
+def test_a_line_given_its_neighbours_translation_is_redone(monkeypatch):
+    source = ["الموضوع مش احنا", "اللي عم بيصير هون اكبر مني ومنك", "انا باعرف", "انا باعرف"]
+    singles = []
+
+    def fake(model, prompt, num_ctx=8192, temperature=0.2):
+        if "\n\nLine: " in prompt:
+            singles.append(prompt.rsplit("Line: ", 1)[1])
+            return {"text": "What's happening here is bigger than you and me."}
+        return {"1": {"first": "الموضوع", "text": "It's not about us."},
+                "2": {"first": "اللي", "text": "It's not about us."},     # line 1's text again
+                "3": {"first": "انا", "text": "I know."},
+                "4": {"first": "انا", "text": "I know."}}                 # said twice: fine
+
+    monkeypatch.setattr(translate, "_generate_raw", fake)
+    out = translate.translate_cues([Cue(i, i + 1, t, "ar", 0.9) for i, t in enumerate(source)],
+                                   "en", progress=lambda s: None)
+    assert [c.text for c in out] == ["It's not about us.",
+                                     "What's happening here is bigger than you and me.",
+                                     "I know.", "I know."]
+    assert singles == ["اللي عم بيصير هون اكبر مني ومنك"]
+
+
+def test_align_by_meaning_finds_rewordings():
+    script = ["We just harvested, but the trees are blossoming again. Out of sync with the seasons.",
+              "We pick them four times a year, Alia."]
+    said = ["Flowering at the wrong time.", "We go there four times a year."]
+    # the words alone pair only the second; the meaning pairs both
+    assert translate.align(said, script) == [None, 1]
+    meaning = [[0.71, 0.20], [0.25, 0.68]]
+    assert translate.align(said, script, meaning) == [0, 1]
+    weak = [[0.40, 0.20], [0.25, 0.68]]  # below the floor: no pair
+    assert translate.align(said, script, weak) == [None, 1]
+
+
+def test_matching_falls_back_to_words_without_embeddings(monkeypatch):
+    import urllib.error
+
+    def no_embed(path, payload=None, timeout=1800):
+        raise urllib.error.URLError("no embedding model")
+
+    monkeypatch.setattr(translate, "_call", no_embed)
+    assert _REAL_MEANING(["a"], ["b"]) is None
