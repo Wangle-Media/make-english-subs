@@ -38,6 +38,7 @@ class Script:
     path: Path
     scenes: list[Scene]
     lang: str = ""    # two-letter code, "" if unknown
+    all_scenes: int = 0  # scenes in the script, with or without dialogue
 
     @property
     def characters(self) -> list[str]:
@@ -51,7 +52,10 @@ class Script:
     def summary(self) -> str:
         from .languages import name
         lang = name(self.lang) if self.lang else "language unknown"
-        return (f"Script {self.path.name}: {len(self.scenes)} scenes, {self.line_count} lines of "
+        n = len(self.scenes)
+        scenes = (f"{n} scenes with dialogue (of {self.all_scenes})" if self.all_scenes > n
+                  else f"{n} scenes")
+        return (f"Script {self.path.name}: {scenes}, {self.line_count} lines of "
                 f"dialogue, {len(self.characters)} characters, {lang}")
 
     def find(self, wanted: str) -> Scene | None:
@@ -65,8 +69,24 @@ class Script:
         return None
 
 
+_loaded: dict[tuple, Script] = {}
+
+
 def load(path: Path) -> Script:
+    """Read a screenplay (.fdx or .pdf). Reading the same unchanged file again is instant."""
     path = Path(path)
+    st = path.stat() if path.is_file() else None
+    key = (str(path.resolve()), st.st_mtime_ns, st.st_size) if st else None
+    if key in _loaded:
+        return _loaded[key]
+    script = _load(path)
+    if key:
+        _loaded.clear()  # keep only the latest script
+        _loaded[key] = script
+    return script
+
+
+def _load(path: Path) -> Script:
     suffix = path.suffix.lower()
     if suffix == ".fdx":
         scenes = _read_fdx(path)
@@ -74,6 +94,7 @@ def load(path: Path) -> Script:
         scenes = _read_pdf(path)
     else:
         raise RuntimeError(f"{path.name}: scripts must be Final Draft (.fdx) or PDF")
+    total = len(scenes)
     scenes = [s for s in scenes if s.lines]
     for i, s in enumerate(scenes):
         s.index = i
@@ -81,12 +102,12 @@ def load(path: Path) -> Script:
         raise RuntimeError(f"{path.name}: found no scenes with dialogue. Is it a screenplay? "
                            "A scanned PDF (pictures of pages) can't be read.")
     text = " ".join(ln.text for s in scenes for ln in s.lines)
-    return Script(path, scenes, detect_language(text))
+    return Script(path, scenes, detect_language(text), total)
 
 
 # ---------------------------------------------------------------- reading
 
-_EXTENSION = re.compile(r"\s*\((V\.?\s?O|O\.?\s?S|O\.?\s?C|CONT'?D|CONT|FORTS?|OFF|ON SCREEN|"
+_EXTENSION = re.compile(r"\s*\((V\.?\s?O|O\.?\s?S|O\.?\s?C|CONT['’]?D|CONT|FORTS?|OFF|ON SCREEN|"
                         r"PRE-?LAP|FILTERED|PHONE|TELEFON|INTO PHONE|SUBTITLED?)[.\s]*\)", re.I)
 
 
@@ -123,14 +144,16 @@ def _read_fdx(path: Path) -> list[Scene]:
     return scenes
 
 
-_HEADING = re.compile(
-    r"^(?:(?P<num>[A-Z]{0,2}\d+[A-Z]{0,3})\.?\s+)?"
+_HEADING = re.compile(  # the scene number may be printed twice at the start ("12 12  INT. ...")
+    r"^(?:(?P<num>[A-Z]{0,2}\d+[A-Za-z]{0,3})\.?\s+(?:(?P=num)\.?\s*)?)?"
     r"(?P<head>(?:INT|EXT|I/E|E/I|INT\.?\s?/\s?EXT|EXT\.?\s?/\s?INT|IND|UD|UDV|INDE|UDE)[.\s/-].*?)"
-    r"(?:\s{2,}[A-Z]{0,2}\d+[A-Z]{0,3}\.?)?\s*$")
+    r"(?:\s{2,}[A-Z]{0,2}\d+[A-Za-z]{0,3}\.?)?\s*$")
 _NUMBERED = re.compile(  # "12   KITCHEN - NIGHT   12" without INT/EXT
-    r"^(?P<num>[A-Z]{0,2}\d+[A-Z]{0,3})\.?\s{2,}(?P<head>\S.*?)(?:\s{2,}(?P=num)\.?)?\s*$")
+    r"^(?P<num>[A-Z]{0,2}\d+[A-Za-z]{0,3})\.?\s{2,}(?P<head>\S.*?)(?:\s{2,}(?P=num)\.?)?\s*$")
+_REVISION_MARK = re.compile(r"\s{2,}\*+$")  # revised-line asterisks in the right margin
+_CHAR_WIDTH = 7.2  # points per character of 12 pt Courier, the screenplay standard
 _PAGE_NOISE = re.compile(
-    r"^\(?(MORE|CONTINUED|CONT'?D|FORTSAT|FORTS\.?)\)?:?$|^\d+\.?$|^CONTINUED:", re.I)
+    r"^\(?(MORE|CONTINUED|CONT['’]?D|FORTSAT|FORTS\.?)\)?:?$|^\d+\.?$|^CONTINUED:", re.I)
 
 
 def _is_upper(text: str) -> bool:
@@ -139,13 +162,92 @@ def _is_upper(text: str) -> bool:
 
 
 def _read_pdf(path: Path) -> list[Scene]:
+    """Read a screenplay PDF in two ways and keep the one that finds more dialogue.
+
+    pypdf's layout mode is right for most PDFs, but on some (Word exports, for one) it
+    splices each character name into the dialogue line under it. Placing every piece of text
+    by its own position on the page avoids that.
+    """
     try:
         import pypdf
         reader = pypdf.PdfReader(path)
-        pages = [p.extract_text(extraction_mode="layout") for p in reader.pages]
+        pages = [_page_pieces(p) for p in reader.pages]
+        width = _char_width(pages)
+        placed = [ln for pieces in pages for ln in _page_rows(pieces, width) + [""]]
+        layout = [ln.rstrip() for p in reader.pages
+                  for ln in p.extract_text(extraction_mode="layout").splitlines() + [""]]
     except Exception as e:  # noqa: BLE001 - pypdf raises many kinds
         raise RuntimeError(f"{path.name}: could not read the PDF ({e})") from e
-    return parse_layout([ln.rstrip() for page in pages for ln in page.splitlines() + [""]])
+    tries = [parse_layout(_clean(rows)) for rows in (placed, layout)]
+    return max(tries, key=lambda scenes: sum(len(s.lines) for s in scenes))
+
+
+Piece = tuple[float, float, str]  # (y, x, text) in points; y grows up the page
+
+
+def _page_pieces(page) -> list[list[Piece]]:
+    """The page's text pieces, grouped into lines from the top (within 3 pt = one line)."""
+    pieces: list[Piece] = []
+
+    def visit(text, cm, tm, _font, _size):
+        if text and text.strip() and text.strip().strip("*"):  # skip revision asterisks
+            x = tm[4] * cm[0] + tm[5] * cm[2] + cm[4]
+            y = tm[4] * cm[1] + tm[5] * cm[3] + cm[5]
+            pieces.append((y, x, " ".join(text.splitlines())))
+
+    page.extract_text(visitor_text=visit)
+    lines: list[list[Piece]] = []
+    for piece in sorted(pieces, key=lambda p: -p[0]):
+        if lines and abs(lines[-1][0][0] - piece[0]) < 3:
+            lines[-1].append(piece)
+        else:
+            lines.append([piece])
+    return [sorted(line, key=lambda p: p[1]) for line in lines]
+
+
+def _char_width(pages: list[list[list[Piece]]]) -> float:
+    """Measure the width of one character (screenplays are set in a fixed-width font).
+
+    Where a line is drawn in several pieces, the next piece starts right after the previous
+    one, or one space after it: the distance divided by the number of characters, the most
+    common value, is the character width. Courier 12 pt (7.2 pt) if there is nothing to go on.
+    """
+    votes: Counter = Counter()
+    for lines in pages:
+        for line in lines:
+            for (_, x0, t0), (_, x1, _t1) in zip(line, line[1:]):
+                n = len(t0)
+                if n >= 3 and x1 > x0:
+                    for chars in (n, n + 1):  # touching, or one word space apart
+                        w = round((x1 - x0) / chars, 2)
+                        if 4 <= w <= 10:
+                            votes[w] += 1
+    return votes.most_common(1)[0][0] if votes else _CHAR_WIDTH
+
+
+def _page_rows(lines: list[list[Piece]], width: float = _CHAR_WIDTH) -> list[str]:
+    """The page as text lines, each piece of text put at the column its position gives."""
+    gaps = sorted(a[0][0] - b[0][0] for a, b in zip(lines, lines[1:]))
+    step = gaps[len(gaps) // 4] if gaps else 0  # usual line spacing (lower quartile)
+    rows: list[str] = []
+    for n, line in enumerate(lines):
+        if n and step and lines[n - 1][0][0] - line[0][0] > 1.5 * step:
+            rows.append("")  # a blank line on the page
+        row, end = "", 0.0
+        for _y, x, text in line:
+            gap = x - end
+            if not row.strip() or gap > 1.5 * width:  # a new column on the line
+                row += " " * max(round(x / width) - len(row), 2 if row else 0)
+            elif gap > 0.5 * width and not (row[-1] + text[0]).isspace():
+                row += " "  # a word space drawn as a gap rather than as a character
+            row += text
+            end = x + len(text) * width
+        rows.append(row.rstrip())
+    return rows
+
+
+def _clean(rows: list[str]) -> list[str]:
+    return [_REVISION_MARK.sub("", r.rstrip()) for r in rows]
 
 
 def _indent(line: str) -> int:
@@ -198,6 +300,8 @@ def parse_layout(rows: list[str]) -> list[Scene]:
         if speaker and 4 <= rel < 17:
             if speech is None:
                 if not scenes:
+                    if heading_at:
+                        continue  # title page or notes before the first scene
                     scenes.append(Scene(0, "", ""))
                 speech = Line(speaker, s)
                 scenes[-1].lines.append(speech)

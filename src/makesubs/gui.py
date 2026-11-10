@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__, languages, translate
+from . import script as screenplay
 from .pipeline import Options, run
 
 
@@ -130,7 +131,106 @@ class LanguagePicker(QPushButton):
         self.changed.emit()
 
 
+class ScenePicker(QPushButton):
+    """Button showing the chosen scenes; click for the script's scenes to tick (searchable).
+    Nothing ticked: the scene is found for each clip automatically."""
+    changed = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet("text-align: left; padding: 4px 8px")
+        self.popup = QFrame(self, Qt.Popup)
+        self.popup.setFrameShape(QFrame.StyledPanel)
+        lay = QVBoxLayout(self.popup)
+        self.search = QLineEdit(placeholderText="Search scene number, place or character…")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._filter)
+        lay.addWidget(self.search)
+        self.list = QListWidget()
+        self.list.itemChanged.connect(lambda _item: self._refresh())
+        lay.addWidget(self.list)
+        auto = QPushButton("Find the scene automatically")
+        auto.clicked.connect(self._clear)
+        lay.addWidget(auto)
+        self.clicked.connect(self._open)
+        self.set_script(None)
+
+    def set_script(self, script) -> None:
+        self.list.blockSignals(True)
+        self.list.clear()
+        for sc in script.scenes if script else []:
+            who = ", ".join(dict.fromkeys(ln.character for ln in sc.lines))
+            number = sc.number or str(sc.index + 1)
+            item = QListWidgetItem(f"{number:>5}   {sc.heading}   ·  {who}")
+            item.setData(Qt.UserRole, number)
+            item.setToolTip("\n".join(f"{ln.character}: {ln.text}" for ln in sc.lines[:4]))
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            self.list.addItem(item)
+        self.list.blockSignals(False)
+        self.setEnabled(bool(script))
+        self._refresh()
+
+    def scenes(self) -> list[str]:
+        return [self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())
+                if self.list.item(i).checkState() == Qt.Checked]
+
+    def _open(self):
+        self.search.clear()
+        self.popup.resize(max(self.width(), 680), 400)
+        self.popup.move(self.mapToGlobal(self.rect().bottomLeft()))
+        self.popup.show()
+        self.search.setFocus()
+
+    def _filter(self, text: str):
+        t = text.strip().lower()
+        for i in range(self.list.count()):
+            item = self.list.item(i)
+            item.setHidden(bool(t) and t not in item.text().lower()
+                           and t != str(item.data(Qt.UserRole)).lower())
+
+    def _clear(self):
+        self.list.blockSignals(True)
+        for i in range(self.list.count()):
+            self.list.item(i).setCheckState(Qt.Unchecked)
+        self.list.blockSignals(False)
+        self._refresh()
+        self.popup.hide()
+
+    def _refresh(self):
+        chosen = self.scenes()
+        if not self.isEnabled():
+            text = "Choose a script first"
+        elif not chosen:
+            text = "Find the scene for each clip automatically"
+        else:
+            text = ("Scene " if len(chosen) == 1 else "Scenes ") + ", ".join(chosen)
+        self.setText(text + "   ▾")
+        self.changed.emit()
+
+
+class ScriptLoader(QObject):
+    """Reads a script off the window's thread (a long PDF takes a few seconds)."""
+    loaded = Signal(str, object)   # path, Script
+    failed = Signal(str, str)      # path, message
+
+    def __init__(self, path: str):
+        super().__init__()
+        self.path = path
+
+    def run(self):
+        if not Path(self.path).is_file():
+            self.failed.emit(self.path, f"{self.path} is not there (moved or renamed?)")
+            return
+        try:
+            self.loaded.emit(self.path, screenplay.load(Path(self.path)))
+        except Exception as e:  # noqa: BLE001 - show anything to the editor
+            self.failed.emit(self.path, str(e))
+
+
 class DropList(QListWidget):
+    script_dropped = Signal(str)
+
     def __init__(self):
         super().__init__()
         self.setAcceptDrops(True)
@@ -144,7 +244,11 @@ class DropList(QListWidget):
     dragMoveEvent = dragEnterEvent
 
     def dropEvent(self, e):
-        self.add_paths(Path(u.toLocalFile()) for u in e.mimeData().urls() if u.isLocalFile())
+        paths = [Path(u.toLocalFile()) for u in e.mimeData().urls() if u.isLocalFile()]
+        for p in paths:  # a dropped screenplay is the script, not a clip
+            if p.is_file() and p.suffix.lower() in (".fdx", ".pdf"):
+                self.script_dropped.emit(str(p))
+        self.add_paths(paths)
 
     def add_paths(self, paths):
         have = set(self.paths())
@@ -188,11 +292,14 @@ class Worker(QObject):
                     self.log.emit(f"        {flagged} line{'s' if flagged > 1 else ''} marked [?] "
                                   f"to check, see {j.info.path.stem}.review.txt")
                 if j.script_match:
-                    differ = sum(c.script_match in ("changed", "none") for c in j.script_cues)
-                    self.log.emit(f"        followed the script ({j.script_match.label}); "
-                                  f"{differ} line{'' if differ == 1 else 's'} differ from it")
+                    n = {k: sum(c.script_match == k for c in j.script_cues)
+                         for k in ("same", "changed", "none")}
+                    self.log.emit(f"        script {j.script_match.label}: {n['same']} as scripted, "
+                                  f"{n['changed']} changed, {n['none']} not in the script; "
+                                  f"see {j.info.path.stem}.review.txt")
                 elif self.opts.script:
-                    self.log.emit("        no script scene found; give the scene number to use it")
+                    self.log.emit("        no script scene found with confidence; pick the scene "
+                                  "under Script to use it")
                 self.folder.emit(str(Path(where).resolve()))
             self.finished.emit(bool(jobs) and not any(j.error for j in jobs))
         except Exception as e:  # noqa: BLE001 - show anything to the editor
@@ -213,6 +320,7 @@ class Window(QMainWindow):
 
         lay.addWidget(QLabel("<b>1. Drop clips (or folders) here</b> — they are only read, never changed."))
         self.files = DropList()
+        self.files.script_dropped.connect(self.set_script)
         lay.addWidget(self.files)
         row = QHBoxLayout()
         add, clear = QPushButton("Add files…"), QPushButton("Clear list")
@@ -274,14 +382,17 @@ class Window(QMainWindow):
         scr.addWidget(pick_script)
         scr.addWidget(no_script)
         form.addRow("Script:", scr)
-        self.scene = QLineEdit()
-        self.scene.setPlaceholderText("Scene number(s), e.g. 23 or 23,24. Leave empty to find "
-                                      "the scene for each clip automatically")
-        form.addRow("", self.scene)
+        self.script_info = QLabel()
+        self.script_info.setWordWrap(True)
+        form.addRow("", self.script_info)
+        self.scene = ScenePicker()
+        form.addRow("Scene:", self.scene)
         self.script_hint = QLabel()
         self.script_hint.setWordWrap(True)
         form.addRow("", self.script_hint)
         self.script: str | None = None
+        self.script_data = None
+        self.script_threads: list[QThread] = []
 
         out = QHBoxLayout()
         self.out_label = QLabel()
@@ -386,7 +497,7 @@ class Window(QMainWindow):
             self.script_hint.setStyleSheet("color: gray")
         if hasattr(self, "script_hint"):
             self.script_hint.setVisible(bool(script))
-            self.scene.setEnabled(bool(script))
+            self.script_info.setVisible(bool(script))
 
     # ---------------------------------------------------------------- actions
 
@@ -398,11 +509,44 @@ class Window(QMainWindow):
 
     def set_script(self, path: str | None):
         self.script = path
+        self.script_data = None
         self.script_label.setText(Path(path).name if path else "None")
         self.script_label.setToolTip(path or "")
-        if not path:
-            self.scene.clear()
+        self.scene.set_script(None)
         self.update_hints()
+        if not path:
+            return
+        self.script_info.setText("Reading the script…")
+        self.script_info.setStyleSheet("color: gray")
+        thread, loader = QThread(), ScriptLoader(path)
+        loader.moveToThread(thread)
+        thread.started.connect(loader.run)
+        loader.loaded.connect(self.script_loaded)
+        loader.failed.connect(self.script_failed)
+        loader.loaded.connect(thread.quit)
+        loader.failed.connect(thread.quit)
+        thread.finished.connect(lambda: self.script_threads.remove(thread))
+        thread.loader = loader  # keep it alive while it runs
+        self.script_threads.append(thread)
+        thread.start()
+
+    def script_loaded(self, path: str, script):
+        if path != self.script:
+            return  # another script was chosen meanwhile
+        self.script_data = script
+        self.scene.set_script(script)
+        names = [c.title() for c in script.characters]
+        more = f" +{len(names) - 8} more" if len(names) > 8 else ""
+        self.script_info.setText(f"Read {script.summary().split(': ', 1)[1]}.\n"
+                                 f"Characters: {', '.join(names[:8])}{more}. Check them: "
+                                 "wrong names or merged words mean the PDF was misread.")
+        self.script_info.setStyleSheet("color: gray")
+
+    def script_failed(self, path: str, message: str):
+        if path != self.script:
+            return
+        self.script_info.setText(f"Can't use this script: {message}")
+        self.script_info.setStyleSheet("color: #c0392b")
 
     def check_llm(self):
         self.llm_ok = translate.available()
@@ -439,6 +583,8 @@ class Window(QMainWindow):
             return self.say("Choose at least one subtitle language.")
         if not formats:
             return self.say("Choose at least one NLE format.")
+        if self.script and not self.script_data:
+            return self.say("The script isn't read yet, or can't be used (see under Script).")
         self.save_settings()
         opts = Options(targets=targets, spoken=self.spoken.codes(),
                        channel=self.channel.currentData(), formats=formats,
@@ -446,7 +592,7 @@ class Window(QMainWindow):
                        out_dir=Path(self.out_dir) if self.out_dir else None,
                        overwrite=self.overwrite.isChecked(),
                        script=Path(self.script) if self.script else None,
-                       scenes=[n.strip() for n in self.scene.text().split(",") if n.strip()])
+                       scenes=self.scene.scenes())
         self.log.clear()
         self.result_dir = ""
         self.show_files.setEnabled(False)
@@ -478,6 +624,8 @@ class Window(QMainWindow):
         self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
 
     def closeEvent(self, e):
+        for t in list(self.script_threads):
+            t.wait(30000)  # let a script being read finish before the window goes
         if self.thread and self.thread.isRunning():
             self.say("Still working — please wait for it to finish.")
             e.ignore()

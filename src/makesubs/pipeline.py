@@ -294,7 +294,7 @@ def run(files: list[Path], opts: Options, progress: Progress = print) -> list[Jo
                     # Translate speech-timed cues and finalize afterwards, so the reading time
                     # is worked out from the translated text, which usually runs longer.
                     cues = translate.translate_cues(job.speech_cues, target, opts.llm_model,
-                                                    draft, note, progress, ref)
+                                                    draft_segs or None, note, progress, ref)
                     if ref and target == report:
                         job.script_cues = cues
                     cues = finalize(cues, job.info.fps)

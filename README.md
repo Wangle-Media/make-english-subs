@@ -99,14 +99,19 @@ better (e.g. a boom on channel 1), pick it.
 `Characters: Nidal, Yasmin. Places: Jenin, Nablus.` This helps the translator spell them right.
 
 **Script** (optional, needs the high-quality translator): click **Choose…** and pick the
-screenplay, as a Final Draft file (`.fdx`, most reliable) or a PDF. Where an actor says a
-scripted line, the subtitle then uses the script's wording; lines the actor changed or
+screenplay, a PDF or a Final Draft file (`.fdx`), or drop it on the clip list. Where an actor
+says a scripted line, the subtitle then uses the script's wording; lines the actor changed or
 improvised are translated as spoken, and listed in `review.txt` next to the script line. See
 [Following the script](#following-the-script). **None** switches it off.
 
-**Scene number(s)**: leave empty and MakeSubs finds the scene for each clip itself. If all
-the clips you're adding are from one scene (or a few), type the number(s), e.g. `23` or
-`23,24`, to be sure.
+Right after you choose it, the window shows what was read: the number of scenes and lines of
+dialogue, and the characters. If the names look wrong (merged words, names that aren't
+characters), the PDF was misread; tell us, and try the `.fdx` if there is one.
+
+**Scene**: leave it on *Find the scene for each clip automatically* and MakeSubs finds the
+scene itself. If all the clips you're adding are from one scene (or a few), click it and tick
+the scene(s): the list shows every scene with its heading and characters, can be searched
+(number, place or character), and shows a scene's first lines when you hover over it.
 
 **Save to**: *Next to each clip* by default. Click **Choose…** to put all subtitle files in one
 folder instead, and **Next to clips** to go back.
@@ -166,14 +171,22 @@ Existing subtitle files are never replaced unless you tick *Replace existing sub
 
 The script is read for its dialogue, scene by scene. For each clip, MakeSubs compares a rough
 English translation of what was said with the script and picks the scene with the most key
-words in common (names, places, unusual words). The translator then sees that scene and
-decides for every line whether the actor said it **as scripted**, **changed** it, or said
-something **not in the script**:
+words in common (names, places, unusual words). Then, in two steps:
 
-- As scripted: the subtitle uses the script's wording (when the script is in the subtitle
-  language; otherwise the script is used for the meaning and the spelling of names).
+1. Every line is translated from what was said, without the script, so the script can't pull
+   the translation towards what the actor was supposed to say.
+2. The translations are compared with that scene's script: for every line the translator
+   decides whether the actor said it **as scripted**, **changed** it, or said something **not
+   in the script**.
+
+- As scripted: the subtitle uses the script's wording, only the part of the script line said in
+  that subtitle. This only happens when the translation and the script line share most of
+  their words, and never when a number, time, day or month differs.
 - Changed or not in the script: translated as actually said. The subtitle shows what is in
   the take, never script text that wasn't spoken.
+
+When the script is in another language than the subtitles, it is used for deciding only; the
+subtitles stay as translated.
 
 `review.txt` ends with what happened:
 
@@ -208,7 +221,8 @@ scene 2        EXT. CHECKPOINT - DAY                               4 lines  SOLD
 ...
 ```
 
-If the scene count, the characters or the first lines look wrong, use the `.fdx` instead.
+If the scene count, the characters or the first lines look wrong, try the `.fdx` if there is
+one. (The window shows the same when you choose the script.)
 
 ### Lines marked `[?]`
 
@@ -393,11 +407,13 @@ all clips succeeded and 1 if any failed, so it can be used in scripts.
 - **Language switches inside a sentence**: language is detected per stretch of speech (up to
   about 15 s), so a short phrase in a second language right next to the first may be written
   in the wrong language.
-- **Scripts**: PDFs are read from the page layout, which works for standard screenplay
-  formatting but not for scanned pages or side-by-side (dual) dialogue; use the `.fdx` when
-  you have it. Finding the scene relies on Whisper's rough English, so it works best when the
-  script is in English; for a script in another language, give the scene number. The
-  translator decides what counts as "as scripted", so check `review.txt` on important scenes.
+- **Scripts**: PDFs are read from where each piece of text sits on the page, which works for
+  standard screenplay formatting from Final Draft, WriterDuet, Word and the like, but not for
+  scanned pages or side-by-side (dual) dialogue (the `.fdx` handles those). Finding the scene
+  relies on Whisper's rough English, so it works best when the script is in English; for a
+  script in another language, pick the scene. The translator decides what counts as "as
+  scripted" and leans towards "changed" when unsure, so check `review.txt` on important
+  scenes.
 - **Camera-original raw formats** (BRAW, R3D, ARRIRAW) aren't supported; use the transcodes.
   Avid OP-Atom MXF stores audio in separate files: point MakeSubs at the audio MXF.
 
