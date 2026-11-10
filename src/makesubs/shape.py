@@ -12,7 +12,9 @@ MAX_LINE = 42          # characters per line (Netflix-style guideline)
 MAX_LINES = 2
 MAX_DURATION = 7.0     # seconds on screen
 MIN_DURATION = 1.0
-LINGER = 0.25          # keep text up slightly after speech ends
+LINGER = 0.7           # keep text up after speech ends (Whisper word ends also run early)
+READING_CPS = 17       # characters per second a viewer can read (Netflix adult guideline)
+CLOSE_GAP = 0.5        # a shorter gap to the next cue is closed, so text doesn't flash off/on
 MAX_WORD_GAP = 1.0     # a pause longer than this always starts a new cue
 MIN_GAP_FRAMES = 2
 
@@ -109,14 +111,27 @@ def wrap(text: str, max_line: int = MAX_LINE) -> str:
         width += 1
 
 
+def reading_time(text: str) -> float:
+    """Seconds a viewer needs to read the text, never less than MIN_DURATION."""
+    return max(MIN_DURATION, len(" ".join(text.split())) / READING_CPS)
+
+
 def finalize(cues: list[Cue], fps: FrameRate | None) -> list[Cue]:
-    """Enforce min duration, linger, gaps and (if known) frame-accurate boundaries."""
+    """Turn speech timing into on-screen timing.
+
+    Expects cue ends at the end of speech (not already finalized): each cue stays up LINGER
+    after speech ends and at least long enough to read its text, and a short gap to the next
+    cue is closed. A cue never runs into the next one, so speech start times are kept.
+    Boundaries are frame-accurate when the frame rate is known.
+    """
     out = [replace(c) for c in sorted(cues, key=lambda c: c.start)]
     frame = frames_to_seconds(1, fps) if fps else 0.04
     gap = MIN_GAP_FRAMES * frame
     for i, c in enumerate(out):
         nxt = out[i + 1].start if i + 1 < len(out) else None
-        want = max(c.end + LINGER, c.start + MIN_DURATION)
+        want = max(c.end + LINGER, c.start + reading_time(c.text))
+        if nxt is not None and nxt - want < CLOSE_GAP:
+            want = nxt - gap
         c.end = min(want, nxt - gap) if nxt is not None else want
         c.end = max(c.end, c.start + frame)  # never zero-length
         if fps:
