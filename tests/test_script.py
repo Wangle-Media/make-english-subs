@@ -608,3 +608,17 @@ def test_matching_falls_back_to_words_without_embeddings(monkeypatch):
 
     monkeypatch.setattr(translate, "_call", no_embed)
     assert _REAL_MEANING(["a"], ["b"]) is None
+
+
+def test_a_close_pair_the_model_rejects_is_kept_as_changed(monkeypatch):
+    """The model tends to say 'none' when a subtitle is only part of a long script line."""
+    ref = translate.ScriptRef([("S1", "ELIAS", "You tell me you doubt your feelings for me. And "
+                                "you expect me to calmly accept that.")], "en")
+    said = ["And you expect me to accept this quietly.", "Can we go again?"]
+    _fake_model(monkeypatch, {}, lambda t: "none")
+    monkeypatch.setattr(translate, "meaning_matrix", lambda s, l: [[0.73], [0.20]])
+    cues = [Cue(i, i + 1, t, "en", 0.9) for i, t in enumerate(said)]
+    translate.compare_script(cues, ref, "en", progress=lambda s: None)
+    assert [(c.text, c.script_match, c.script_ref) for c in cues] == [
+        ("And you expect me to accept this quietly.", "changed", "S1"),  # wording kept
+        ("Can we go again?", "none", "")]

@@ -64,7 +64,8 @@ def ensure_model(model: str, progress: Callable[[str], None] = print) -> None:
 
 def unload(model: str) -> None:
     if model == EMBED_MODEL:  # an embedding model is unloaded through the embed endpoint
-        path, payload = "/api/embed", {"model": model, "input": [], "keep_alive": 0}
+        # (an empty input is ignored, model and all: it needs something to embed)
+        path, payload = "/api/embed", {"model": model, "input": ".", "keep_alive": 0}
     else:
         path, payload = "/api/generate", {"model": model, "keep_alive": 0}
     try:
@@ -422,8 +423,10 @@ def compare_script(cues: list[Cue], script: ScriptRef, target: str, model: str =
     refs = [ref for ref, _, _ in script.lines]
     texts = [said for _, _, said in script.lines]
     said = [c.text for c in cues]
-    paired = [(c, k) for c, k in zip(cues, align(said, texts, meaning_matrix(said, texts)))
-              if k is not None and not c.flagged]
+    meaning = meaning_matrix(said, texts)
+    pairs_at = {id(c): (i, k) for i, (c, k) in enumerate(zip(cues, align(said, texts, meaning)))}
+    paired = [(c, pairs_at[id(c)][1]) for c in cues
+              if pairs_at[id(c)][1] is not None and not c.flagged]
     for rng in _batches(len(paired), COMPARE_BATCH):
         batch = paired[rng.start:rng.stop]
         progress(f"  comparing with the script: {rng.start + 1}-{rng.stop} of {len(paired)} "
@@ -434,6 +437,11 @@ def compare_script(cues: list[Cue], script: ScriptRef, target: str, model: str =
             v = verdicts.get(str(n + 1))
             v = (v.get("match") if isinstance(v, dict) else v) or ""
             v = str(v).strip().lower()
+            i = pairs_at[id(c)][0]
+            if v == "none" and meaning is not None and meaning[i][k] >= SURE_MEANING:
+                # The model tends to reject a subtitle that says only part of a long line;
+                # this close in meaning it's that line: listed as changed, wording kept.
+                v = "changed"
             if v in ("same", "changed"):
                 c.script_match, c.script_ref = v, refs[k]
 
@@ -471,6 +479,8 @@ def _judge_prompt(pairs: dict[str, dict]) -> str:
         "Each numbered item pairs a subtitle of what an actor ACTUALLY said with the script line "
         "it was matched to. The subtitles are a translation of a translation and come from "
         "speech recognition, so the words are almost never identical: judge the meaning.\n"
+        "A subtitle often says only one part of a long script line, or puts it in other words; "
+        "that part is still this line: judge only whether what the subtitle says matches it.\n"
         "- \"same\": the subtitle says what the script line says, or part of it.\n"
         "- \"changed\": it is the script line, but the actor changed the meaning: another "
         "number, time, day, month, name, place or person, or something added or left out "
@@ -502,6 +512,7 @@ def _find_in_script(cues: list[Cue], script: ScriptRef, target: str, model: str,
 
 
 MEANING_FLOOR = 0.55  # meaning similarity below this is no match (measured on IMOTTC sc. 69)
+SURE_MEANING = 0.70   # this close, a pair the model rejects is kept as "changed" (same scene)
 EMBED_MODEL = "mxbai-embed-large"  # sentence embeddings (~670 MB), for matching by meaning
 
 
