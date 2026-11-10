@@ -125,6 +125,12 @@ def planned_outputs(info: MediaInfo, opts: Options) -> list[Path]:
     return [output_path(info, opts, t, f) for t in tags for f in opts.formats]
 
 
+def _is_english(text: str) -> bool:
+    """Mostly Latin letters: the draft is English, not left in the spoken language."""
+    letters = [c for c in text if c.isalpha()]
+    return bool(letters) and sum(c.isascii() for c in letters) >= 0.8 * len(letters)
+
+
 def _flag_overlapping(cues: list[Cue], reference: list[Cue], threshold: float) -> None:
     bad = [r for r in reference if r.flagged]
     for c in cues:
@@ -275,29 +281,39 @@ def run(files: list[Path], opts: Options, progress: Progress = print) -> list[Jo
             continue
         try:
             draft_segs = job.transcript.english or []
-            draft = " ".join(s.text for s in draft_segs) or None
-            ref = None
+            # Some Whisper models (dialect fine-tunes) can no longer translate and hand back
+            # the source language: that is no help as an English reference.
+            english_segs = [s for s in draft_segs if _is_english(s.text)]
+            translated: dict[str, list] = {}
+            if translator == "llm":
+                # Translate speech-timed cues and finalize afterwards, so the reading time is
+                # worked out from the translated text, which usually runs longer.
+                for target in opts.targets:
+                    translated[target] = translate.translate_cues(
+                        job.speech_cues, target, opts.llm_model, english_segs or None, note,
+                        progress)
             if script:
                 if opts.scenes:
                     job.script_match = screenplay.Match(
                         [script.find(n) for n in opts.scenes], 1.0, [], by_hand=True)
                 else:
-                    job.script_match, job.script_guess = finder.locate(draft or "")
+                    # Find the scene from the translation (better English than Whisper's draft,
+                    # which a dialect model may not give at all), else from the draft.
+                    text = " ".join(c.text for c in translated.get("en", [])) or \
+                        " ".join(s.text for s in english_segs)
+                    job.script_match, job.script_guess = finder.locate(text)
                 if job.script_match:
                     ref, job.script_lines = _script_ref(job.script_match, script.lang)
                     progress(f"  following the script: {job.script_match.label}")
+                    report = script.lang if script.lang in opts.targets else opts.targets[0]
+                    translate.compare_script(translated[report], ref, report, opts.llm_model,
+                                             progress)
+                    job.script_cues = translated[report]
                 else:
-                    progress("  no script scene matched with confidence; translating without it")
-            report = script.lang if script and script.lang in opts.targets else opts.targets[0]
+                    progress("  no script scene matched with confidence; translated without it")
             for target in opts.targets:
                 if translator == "llm":
-                    # Translate speech-timed cues and finalize afterwards, so the reading time
-                    # is worked out from the translated text, which usually runs longer.
-                    cues = translate.translate_cues(job.speech_cues, target, opts.llm_model,
-                                                    draft_segs or None, note, progress, ref)
-                    if ref and target == report:
-                        job.script_cues = cues
-                    cues = finalize(cues, job.info.fps)
+                    cues = finalize(translated[target], job.info.fps)
                 else:  # Whisper's own English translation, with its own timing
                     cues = build_cues(draft_segs)
                     _flag_overlapping(cues, job.source_cues, opts.flag_threshold)

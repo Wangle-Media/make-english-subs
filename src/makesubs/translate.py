@@ -339,6 +339,7 @@ def compare_script(cues: list[Cue], script: ScriptRef, target: str, model: str =
     # Use the script's wording only where the subtitle demonstrably says it: the part of the
     # script line it shares words with (a line said over several subtitles gives each its own
     # part), most of its words in common, and the same numbers, times and dates.
+    planned: list[tuple[Cue, str, set]] = []
     for c in cues:
         if c.script_match != "same":
             continue
@@ -348,6 +349,15 @@ def compare_script(cues: list[Cue], script: ScriptRef, target: str, model: str =
         if not new or _similarity(c.text, new) < 0.5 or _facts(c.text) != _facts(new):
             c.script_match = "changed"  # not clearly what was said: keep the translation
         else:
+            planned.append((c, new, {(c.script_ref, j) for j in range(hit[0], hit[-1] + 1)}))
+    # A script sentence said over several subtitles ("I also made" / "baklava") can't be split
+    # between them: those keep their translations rather than all showing the whole sentence.
+    claimed: dict = {}
+    for _c, _new, spans in planned:
+        for s in spans:
+            claimed[s] = claimed.get(s, 0) + 1
+    for c, new, spans in planned:
+        if all(claimed[s] == 1 for s in spans):
             c.text = new
 
 
