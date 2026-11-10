@@ -1,0 +1,415 @@
+"""Following a screenplay: reading .fdx/.pdf, finding the scene, script-aware translation."""
+import json
+from pathlib import Path
+
+import pytest
+
+from makesubs import pipeline, translate
+from makesubs import script as screenplay
+from makesubs.asr import Segment, Transcript, Word
+from makesubs.pipeline import Options
+from makesubs.shape import Cue
+
+DATA = Path(__file__).parent / "data"
+
+# tests/data/screenplay.pdf was made from screenplay.fountain with screenplain (standard
+# screenplay layout); the same three scenes, as Final Draft XML:
+FDX = """<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<FinalDraft DocumentType="Script" Template="No" Version="5">
+<Content>
+<Paragraph Number="1" Type="Scene Heading"><Text>INT. KITCHEN - NIGHT</Text></Paragraph>
+<Paragraph Type="Action"><Text>Yasmin stirs a pot.</Text></Paragraph>
+<Paragraph Type="Character"><Text>NIDAL (V.O.)</Text></Paragraph>
+<Paragraph Type="Dialogue"><Text>Is the bread ready? We leave for </Text><Text Style="Italic">Nablus</Text><Text> before the checkpoint closes.</Text></Paragraph>
+<Paragraph Type="Character"><Text>YASMIN</Text></Paragraph>
+<Paragraph Type="Parenthetical"><Text>(not looking up)</Text></Paragraph>
+<Paragraph Type="Dialogue"><Text>Not yet. Your mother wanted the olives packed first.</Text></Paragraph>
+<Paragraph Type="Transition"><Text>CUT TO:</Text></Paragraph>
+<Paragraph Number="2A" Type="Scene Heading"><Text>EXT. CHECKPOINT - DAY</Text></Paragraph>
+<Paragraph Type="Character"><Text>SOLDIER</Text></Paragraph>
+<Paragraph Type="Dialogue"><Text>Papers. Everyone out of the car.</Text></Paragraph>
+<Paragraph><DualDialogue>
+<Paragraph Type="Character"><Text>NIDAL ^</Text></Paragraph>
+<Paragraph Type="Dialogue"><Text>My cousin Karim is getting married.</Text></Paragraph>
+<Paragraph Type="Character"><Text>YASMIN</Text></Paragraph>
+<Paragraph Type="Dialogue"><Text>Only olives and a cake.</Text></Paragraph>
+</DualDialogue></Paragraph>
+<Paragraph Type="Action"><Text>The soldier waves them on.</Text></Paragraph>
+</Content>
+</FinalDraft>
+"""
+
+
+@pytest.fixture
+def fdx(tmp_path):
+    p = tmp_path / "film.fdx"
+    p.write_text(FDX, encoding="utf-8")
+    return p
+
+
+def test_read_fdx(fdx):
+    sc = screenplay.load(fdx)
+    assert [s.number for s in sc.scenes] == ["1", "2A"]
+    assert sc.scenes[1].heading == "EXT. CHECKPOINT - DAY"
+    first = sc.scenes[0].lines
+    assert [ln.character for ln in first] == ["NIDAL", "YASMIN"]  # (V.O.) dropped
+    assert first[0].text == "Is the bread ready? We leave for Nablus before the checkpoint closes."
+    assert [(ln.character, ln.text) for ln in sc.scenes[1].lines] == [
+        ("SOLDIER", "Papers. Everyone out of the car."),
+        ("NIDAL", "My cousin Karim is getting married."),  # dual dialogue, ^ dropped
+        ("YASMIN", "Only olives and a cake.")]
+    assert sc.find("2a") is sc.scenes[1] and sc.find("3") is None
+
+
+def test_read_pdf():
+    sc = screenplay.load(DATA / "screenplay.pdf")
+    assert [s.number for s in sc.scenes] == ["1", "2", "3"]
+    assert [s.heading for s in sc.scenes] == [
+        "INT. KITCHEN - NIGHT", "EXT. CHECKPOINT - DAY", "INT. UNCLE'S HOUSE - NIGHT"]
+    assert sc.line_count == 9
+    yasmin = sc.scenes[0].lines[1]
+    # parenthetical "(not looking up)" left out, the three printed lines joined into one speech
+    assert (yasmin.character, yasmin.text) == (
+        "YASMIN", "Not yet. Your mother wanted the olives packed first, and the jars are still wet.")
+    assert sc.scenes[0].lines[0].character == "NIDAL"  # "NIDAL (V.O.)"
+    assert all("CUT TO" not in ln.text for s in sc.scenes for ln in s.lines)
+    assert sc.lang == "en"
+    assert set(sc.characters) == {"NIDAL", "YASMIN", "SOLDIER", "KARIM"}
+
+
+def test_layout_without_scene_numbers_and_across_pages():
+    rows = [
+        "INT. KITCHEN - NIGHT", "",
+        "Yasmin stirs a pot while the radio crackles with news from the city.", "",
+        "                      NIDAL", "          We leave before the check-",
+        "          point closes.", "                    (MORE)", "", "2.", "",
+        "                      NIDAL (CONT'D)", "          Tell my mother.", "",
+        "                                                   CUT TO:", "",
+        "EXT. ROAD - DAY", "",
+        "                      YASMIN", "          Faster.",
+    ]
+    scenes = screenplay.parse_layout(rows)
+    assert [s.number for s in scenes] == ["", ""]
+    assert [(ln.character, ln.text) for ln in scenes[0].lines] == [
+        ("NIDAL", "We leave before the checkpoint closes."), ("NIDAL", "Tell my mother.")]
+    assert scenes[1].lines[0].text == "Faster."
+
+
+def test_unreadable_script(tmp_path):
+    bad = tmp_path / "notes.pdf"
+    bad.write_bytes(b"not a pdf")
+    with pytest.raises(RuntimeError, match="could not read"):
+        screenplay.load(bad)
+    with pytest.raises(RuntimeError, match=".fdx"):
+        screenplay.load(tmp_path / "script.docx")
+
+
+def test_detect_language():
+    assert screenplay.detect_language("You know that I was not there, and what they said is "
+                                      "not true. " * 4) == "en"
+    assert screenplay.detect_language("Jeg ved ikke hvad du har gjort, og det er ikke min skyld "
+                                      "at vi skal gå nu. " * 4) == "da"
+    assert screenplay.detect_language("too short") == ""
+
+
+def test_scene_finder_picks_the_scene_from_a_rough_translation():
+    sc = screenplay.load(DATA / "screenplay.pdf")
+    finder = screenplay.SceneFinder(sc)
+    m, _ = finder.locate("Papers please. Everyone get out. We go to the wedding of my uncle "
+                         "in Nablus, my cousin Karim marries.")
+    assert m and m.scenes[0].number == "2" and "karim" in m.words and "nablus" in m.words
+    m, guess = finder.locate("I love you so much, it's okay.")
+    assert m is None and guess is not None and guess.coverage < screenplay.MIN_COVERAGE
+    assert finder.locate("") == (None, None)
+
+
+def test_parse_answer():
+    a = translate.parse_answer({"text": " Hello ", "script": "s4", "match": "Same"})
+    assert (a.text, a.script_ref, a.match) == ("Hello", "S4", "same")
+    a = translate.parse_answer({"text": "Hi", "script": 2, "match": "changed"})
+    assert (a.script_ref, a.match) == ("S2", "changed")
+    a = translate.parse_answer({"text": "Hi", "script": None, "match": "none"})
+    assert (a.script_ref, a.match) == ("", "none")
+    a = translate.parse_answer({"text": "Hi", "script": "S3", "match": "none"})
+    assert a.script_ref == ""  # "not in the script" can't point at a script line
+    a = translate.parse_answer({"text": "Hi", "script": "S12 NIDAL: Hi there.", "match": "same"})
+    assert (a.script_ref, a.match) == ("S12", "same")  # the model quoted the whole line
+    assert translate.parse_answer("plain").text == "plain"
+
+
+def _answers(prompt: str, make) -> dict:
+    lines = json.loads(prompt.rsplit("\n\n", 1)[1])
+    return {k: make(k, v) for k, v in lines.items()}
+
+
+def _fake_model(monkeypatch, said: dict, verdict, seen: list | None = None):
+    """Translation prompts get said[number]; comparison prompts get verdict(subtitle)."""
+    def fake(model, prompt, num_ctx=8192):
+        if seen is not None:
+            seen.append(prompt)
+        items = json.loads(prompt.rsplit("\n\n", 1)[1])
+        if "Each numbered item pairs" in prompt:
+            return {k: verdict(v["said"]) for k, v in items.items()}
+        return {k: said[k] for k in items}
+    monkeypatch.setattr(translate, "_generate_raw", fake)
+
+
+def test_translate_cues_with_script(monkeypatch):
+    ref = translate.ScriptRef([("S1", "NIDAL", "Is the bread ready?"),
+                               ("S2", "YASMIN", "Lars sold that boat in March.")], "en")
+    seen = []
+    said = {"1": "Is the bread done?", "2": "Lars sold the boat in April.", "3": "Let's go."}
+    # the model calls both "same", but the month differs in the second: what was said wins
+    _fake_model(monkeypatch, said, lambda t: "same", seen)
+    cues = [Cue(0, 1, "هل الخبز جاهز؟", "ar", 0.9), Cue(2, 3, "لارس باع القارب في أبريل", "ar", 0.9),
+            Cue(4, 5, "يلا نروح", "ar", 0.9)]
+    out = translate.translate_cues(cues, "en", draft="rough draft", progress=lambda s: None,
+                                   script=ref)
+    assert [(c.text, c.script_ref, c.script_match) for c in out] == [
+        ("Is the bread ready?", "S1", "same"),
+        ("Lars sold the boat in April.", "S2", "changed"),
+        ("Let's go.", "", "none")]
+    first, second = seen
+    # translation never sees the script, so it cannot pull what was said towards it
+    assert "Is the bread ready" not in first and "rough draft" in first
+    # the comparison only sees the pairs the code lined up ("Let's go." matches nothing)
+    assert '"script": "Is the bread ready?"' in second and "Let's go" not in second
+
+
+def test_align_keeps_the_script_order():
+    script = ["Hummus, vine leaves, tabbouleh.", "My favourite.", "You've been sleeping a lot.",
+              "It's not about us, Elias, it's about everything.",
+              "Whatever is going on is much bigger than you and me.",
+              "You haven't been yourself lately."]
+    said = ["Action!", "Hummus, vine leaves and tabbouleh.", "You're sleeping a lot.",
+            "I feel they're moving.",                       # crew talk: shares nothing useful
+            "It's not just about us, it's about everyone.",
+            "What's happening here is bigger than me and you, Elias.",
+            "You haven't been yourself lately, you know."]
+    assert translate.align(said, script) == [None, 0, 2, None, 3, 4, 5]
+    # repeated takes of a line after the scene moved on are not pulled back
+    assert translate.align(["My favourite.", "You've been sleeping a lot."], script) == [1, 2]
+
+
+def test_facts():
+    assert translate._facts("The ferry leaves in ten minutes.") == {"10"}
+    assert translate._facts("The ferry sails in 10 minutes.") == {"10"}
+    assert translate._facts("We drive at noon on Monday.") == {"12:00", "monday"}
+    assert translate._facts("You may go.") == set()
+
+
+def test_compare_when_script_is_in_another_language(monkeypatch):
+    ref = translate.ScriptRef([("S1", "NIDAL", "Er brødet klar?")], "da")
+    p = translate._compare_prompt({"1": "x"}, ref, "en")
+    assert "Danish" in p and "script's own wording" not in p
+    monkeypatch.setattr(translate, "_generate", lambda m, p, n=8192: _answers(
+        p, lambda k, v: translate.parse_answer(
+            {"text": "Er brødet klar?", "script": "S1", "match": "same"})))
+    cues = [Cue(0, 1, "Is the bread ready?", "en", 0.9)]
+    translate.compare_script(cues, ref, "en", progress=lambda s: None)
+    # matched, but the subtitle stays in the subtitle language
+    assert (cues[0].text, cues[0].script_ref, cues[0].script_match) == (
+        "Is the bread ready?", "S1", "same")
+
+
+def test_compare_ignores_lines_that_match_nothing(monkeypatch):
+    ref = translate.ScriptRef([("S1", "NIDAL", "Is the bread ready?")], "en")
+    _fake_model(monkeypatch, {}, lambda t: "same")  # would say "same" to anything
+    cues = [Cue(0, 1, "Hello.", "en", 0.9)]
+    translate.compare_script(cues, ref, "en", progress=lambda s: None)
+    assert (cues[0].text, cues[0].script_ref, cues[0].script_match) == ("Hello.", "", "none")
+
+
+def test_translate_without_script_is_unchanged(monkeypatch):
+    monkeypatch.setattr(translate, "_generate", lambda m, p, n=8192: _answers(
+        p, lambda k, v: translate.parse_answer("Hello")))
+    out = translate.translate_cues([Cue(0, 1, "مرحبا", "ar", 0.9)], "en", progress=lambda s: None)
+    assert out[0].text == "Hello" and out[0].script_match == ""
+
+
+def test_excerpt_is_capped(monkeypatch):
+    monkeypatch.setattr(pipeline, "MAX_EXCERPT", 120)
+    sc = screenplay.load(DATA / "screenplay.pdf")
+    m = screenplay.Match(list(sc.scenes[:2]), 1.0, [], by_hand=True)
+    ref, kept = pipeline._script_ref(m, "en")
+    assert m.scenes == [sc.scenes[0]]  # the second scene didn't fit
+    assert sum(len(t) for _r, _c, t in ref.lines) <= 120 and kept and len(kept) < 3
+
+
+def test_validate_script_needs_the_llm(monkeypatch, fdx):
+    monkeypatch.setattr(translate, "available", lambda: False)
+    with pytest.raises(RuntimeError, match="script needs"):
+        pipeline.validate(Options(script=fdx))
+    with pytest.raises(RuntimeError, match="only work together with a script"):
+        pipeline.validate(Options(scenes=["1"], translator="whisper"))
+    with pytest.raises(RuntimeError, match="has no scene 9"):
+        pipeline.load_script(Options(script=fdx, scenes=["1", "9"]))
+
+
+def _words(text, start):
+    return [Word(start + i * 0.4, start + i * 0.4 + 0.3, " " + w, 0.9)
+            for i, w in enumerate(text.split())]
+
+
+def _segment(text, start, lang):
+    words = _words(text, start)
+    return Segment(words[0].start, words[-1].end, text, lang, words)
+
+
+@pytest.fixture
+def fake_engines(monkeypatch):
+    """Whisper and Ollama replaced by canned answers; the clip itself is really read."""
+    class Engine:
+        name = "fake"
+
+        def unload(self):
+            pass
+
+    source = [_segment("الأوراق لو سمحت انزلوا كلكم من السيارة", 0.2, "ar"),
+              _segment("رايحين على عرس ابن عمي كريم في نابلس", 4.0, "ar"),
+              _segment("يلا بسرعة", 9.5, "ar")]
+    english = [_segment("Papers please, everyone get out of the car.", 0.2, "en"),
+               _segment("We are going to my cousin Karim's wedding in Nablus.", 4.0, "en"),
+               _segment("Come on, quickly.", 9.5, "en")]
+    monkeypatch.setattr(pipeline.asr, "create_engine", lambda *a: Engine())
+    monkeypatch.setattr(pipeline.asr, "transcribe",
+                        lambda *a: Transcript(source, english, ["ar"]))
+    monkeypatch.setattr(pipeline, "load_audio", lambda *a: None)
+    monkeypatch.setattr(translate, "available", lambda: True)
+    monkeypatch.setattr(translate, "ensure_model", lambda *a: None)
+    monkeypatch.setattr(translate, "unload", lambda *a: None)
+    prompts = []
+    said = {"1": "Papers, please. All of you out of the car.",
+            "2": "We're going to my cousin Karim's wedding in Nablus.",
+            "3": "Come on, hurry."}
+    verdicts = {said["1"]: "same", said["2"]: "changed"}
+    _fake_model(monkeypatch, said, lambda t: verdicts.get(t, "none"), prompts)
+    return prompts
+
+
+def test_run_follows_the_script(clip, fake_engines, tmp_path):
+    opts = Options(targets=["en"], spoken=["ar"], script=DATA / "screenplay.pdf",
+                   out_dir=tmp_path)
+    log = []
+    jobs = pipeline.run([clip], opts, log.append)
+    job = jobs[0]
+    assert not job.error, job.error
+    assert job.script_match and job.script_match.scenes[0].number == "2"
+    assert any("following the script: scene 2" in s for s in log)
+    translation, comparison = fake_engines
+    assert "Characters in the script:" in translation and "Papers. Everyone" not in translation
+    assert '"script": "Papers. Everyone out of the car."' in comparison
+    srt = (tmp_path / f"{clip.stem}.en.srt").read_text(encoding="utf-8")
+    assert "Papers. Everyone out of the car." in srt
+    review = (tmp_path / f"{clip.stem}.review.txt").read_text(encoding="utf-8")
+    assert "screenplay.pdf, scene 2 EXT. CHECKPOINT - DAY" in review
+    assert "3 lines compared: 1 as scripted, 1 changed, 1 not in the script" in review
+    assert "changed  We're going to my cousin Karim's wedding in Nablus." in review
+    assert "script:  NIDAL: We are going to my uncle's wedding in Nablus." in review
+    assert "Come on, hurry." in review
+
+
+def test_run_scene_by_hand_and_no_match(clip, fake_engines, tmp_path, monkeypatch):
+    opts = Options(targets=["en"], spoken=["ar"], script=DATA / "screenplay.pdf",
+                   scenes=["3"], out_dir=tmp_path, overwrite=True)
+    job = pipeline.run([clip], opts, lambda s: None)[0]
+    assert job.script_match.by_hand and job.script_match.scenes[0].number == "3"
+    review = (tmp_path / f"{clip.stem}.review.txt").read_text(encoding="utf-8")
+    assert "screenplay.pdf, scene 3" in review and "set by hand" in review
+
+    monkeypatch.setattr(pipeline.screenplay, "MIN_COVERAGE", 0.99)
+    opts = Options(targets=["en"], spoken=["ar"], script=DATA / "screenplay.pdf",
+                   out_dir=tmp_path, overwrite=True)
+    job = pipeline.run([clip], opts, lambda s: None)[0]
+    assert job.script_match is None and "Each numbered item pairs" not in fake_engines[-1]
+    review = (tmp_path / f"{clip.stem}.review.txt").read_text(encoding="utf-8")
+    assert "no scene matched with confidence (best guess scene 2" in review
+
+
+def _line(y, *pieces, w=7.0):
+    """One line of a page as PDF text pieces: (column, text) at w points per character."""
+    return [(y, col * w, text) for col, text in pieces]
+
+
+def test_pdf_pieces_word_export():
+    """What a Word-exported screenplay looks like: scene numbers on both sides, revision
+    asterisks, names on their own line, words split where the revision colour changes and
+    word spaces drawn as gaps. Lines are 12 pt apart, a blank line 24."""
+    w = 7.0
+    page = [
+        _line(700, (8, "12"), (15, "12"), (15 + 2, "EXT. TERRACE, ALIA’S"), (38, "TOWNHOUSE - DAY")),
+        _line(676, (15, "Alia enters the terrace.")),
+        _line(652, (35, "ALIA")),
+        _line(640, (25, "Why so tense"), (37, "?")),          # punctuation touches
+        _line(616, (35, "ELIAS (CONT’D)")),
+        _line(604, (25, "I unclogged the"), (41, "carbu"), (46, "retor.")),  # colour split
+        _line(592, (25, "Maybe you didn’t tighten it"), (25 + 28, "enough.")),  # gap = space
+    ]
+    page[0] = [(700, 8 * w, "12"), (700, 15 * w, "12"), (700, 18 * w, "EXT. TERRACE, ALIA’S"),
+               (700, 39 * w, "TOWNHOUSE - DAY")]
+    assert screenplay._char_width([page]) == w
+    rows = screenplay._clean(screenplay._page_rows(page, w))
+    scenes = screenplay.parse_layout(rows)
+    assert [(s.number, s.heading) for s in scenes] == [("12", "EXT. TERRACE, ALIA’S TOWNHOUSE - DAY")]
+    assert [(ln.character, ln.text) for ln in scenes[0].lines] == [
+        ("ALIA", "Why so tense?"),
+        ("ELIAS", "I unclogged the carburetor. Maybe you didn’t tighten it enough.")]
+
+
+def test_heading_with_glued_scene_numbers():
+    rows = ["        4a 4aINT. DARK SPACE - DAY", "", "                    ALIA",
+            "          Hello?", "", "        GREEN"]
+    assert [(s.number, s.heading) for s in screenplay.parse_layout(rows)] == [
+        ("4a", "INT. DARK SPACE - DAY")]
+
+
+def test_title_page_is_not_dialogue():
+    pad = " " * 10  # action margin; dialogue 10 further in, character names 22
+    rows = [pad + " " * 22 + "GREEN", pad + " " * 10 + "With locked scene numbers", "",
+            "1" + " " * 9 + "INT. KITCHEN - NIGHT", "", pad + " " * 22 + "ALIA",
+            pad + " " * 10 + "Hello?"]
+    scenes = screenplay.parse_layout(rows)
+    assert [s.number for s in scenes] == ["1"] and scenes[0].lines[0].character == "ALIA"
+
+
+def test_script_wording_for_a_line_split_over_subtitles(monkeypatch):
+    ref = translate.ScriptRef([("S1", "ANNA", "Don't lie to me, Mikkel. Not today."),
+                               ("S2", "ANNA", "It's Dad's birthday. We're driving there at noon."),
+                               ("S3", "OFFICER", "Passports, please."),
+                               ("S4", "OFFICER", "Everyone shows a passport. Even for the day.")],
+                              "en")
+    said = ["Don't you lie to me, Mikkel.", "Not today.", "It's Dad's birthday.",
+            "Mum is waiting for us there.", "Thanks.",  # "Thanks": misheard "Passports, please"
+            "Everyone must show their passport.", "Also on a day trip."]
+    _fake_model(monkeypatch, {}, lambda t: "same")
+    cues = [Cue(i, i + 1, t, "en", 0.9) for i, t in enumerate(said)]
+    translate.compare_script(cues, ref, "en", progress=lambda s: None)
+    assert [(c.text, c.script_match) for c in cues] == [
+        ("Don't lie to me, Mikkel.", "same"), ("Not today.", "same"),
+        ("It's Dad's birthday.", "same"),          # never "... at noon": not said here
+        ("Mum is waiting for us there.", "none"),
+        ("Thanks.", "none"),   # shares no word with S3: never swapped for script text
+        ("Everyone shows a passport.", "same"),    # each subtitle gets its own sentence
+        ("Even for the day.", "same")]
+
+
+def test_batches_are_even():
+    assert [len(r) for r in translate._batches(42)] == [21, 21]
+    assert [len(r) for r in translate._batches(40)] == [40]
+    assert [len(r) for r in translate._batches(81)] == [27, 27, 27]
+    assert translate._batches(0) == []
+
+
+def test_each_batch_sees_only_its_own_part_of_the_draft(monkeypatch):
+    """With the whole clip's draft, the model translated a short last batch from the draft's
+    first sentences ("Action!") instead of from its own lines."""
+    monkeypatch.setattr(translate, "BATCH", 2)
+    seen = []
+    monkeypatch.setattr(translate, "_generate", lambda m, p, n=8192: seen.append(p) or _answers(
+        p, lambda k, v: translate.parse_answer("x")))
+    draft = [Segment(0, 2, " Action!", "en", []), Segment(10, 12, " Hummus and vine leaves.", "en", []),
+             Segment(30, 32, " Something is off.", "en", [])]
+    cues = [Cue(0, 2, "أكشن", "ar", 0.9), Cue(10, 12, "حمص", "ar", 0.9), Cue(30, 32, "في اشي", "ar", 0.9)]
+    translate.translate_cues(cues, "en", draft=draft, progress=lambda s: None)
+    assert "Action!" in seen[0] and "Something is off" not in seen[0]
+    assert "Something is off." in seen[-1] and "Action!" not in seen[-1]

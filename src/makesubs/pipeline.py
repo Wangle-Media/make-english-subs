@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import asr, translate
+from . import script as screenplay
 from .audio import load_audio
 from .probe import MediaInfo, probe
 from .shape import Cue, build_cues, finalize
@@ -32,6 +33,11 @@ class Options:
     mark_flagged: bool = True
     backend: str = "auto"
     whisper_model: str | None = None
+    script: Path | None = None        # screenplay (.fdx/.pdf) for the translator to follow
+    scenes: list[str] = field(default_factory=list)  # script scene numbers; [] = find per clip
+
+
+MAX_EXCERPT = 9000   # characters of script given to the translator per clip
 
 
 @dataclass
@@ -42,6 +48,10 @@ class Job:
     source_cues: list[Cue] = field(default_factory=list)  # on-screen timing (finalized)
     outputs: list[Path] = field(default_factory=list)
     error: str | None = None
+    script_match: screenplay.Match | None = None   # scene(s) used for this clip
+    script_guess: screenplay.Match | None = None   # best scene, even if not good enough
+    script_cues: list[Cue] = field(default_factory=list)  # translated cues with match info
+    script_lines: list[tuple[str, screenplay.Line]] = field(default_factory=list)
 
 
 def resolve_translator(opts: Options) -> str:
@@ -63,7 +73,42 @@ def validate(opts: Options) -> str:
     for f in opts.formats:
         if f not in ("srt", "avid"):
             raise RuntimeError(f"unknown format {f!r}")
+    if opts.script and tr != "llm":
+        raise RuntimeError("Following a script needs the local translation model (Ollama), which "
+                           "is not running. Start Ollama, or leave the script out.")
+    if opts.scenes and not opts.script:
+        raise RuntimeError("Scene numbers only work together with a script.")
     return tr
+
+
+def load_script(opts: Options) -> screenplay.Script | None:
+    if not opts.script:
+        return None
+    if not Path(opts.script).is_file():
+        raise RuntimeError(f"Script not found: {opts.script}")
+    script = screenplay.load(Path(opts.script))
+    missing = [n for n in opts.scenes if script.find(n) is None]
+    if missing:
+        raise RuntimeError(f"{script.path.name} has no scene {', '.join(missing)}. "
+                           "Check the numbers with: makesubs --script-info SCRIPT")
+    return script
+
+
+def _script_ref(match: screenplay.Match, lang: str) -> tuple[translate.ScriptRef, list]:
+    """The excerpt for the translator: the best scene, plus neighbours while it fits."""
+    scenes = list(match.scenes)
+    while len(scenes) > 1 and sum(len(ln.text) for s in scenes for ln in s.lines) > MAX_EXCERPT:
+        scenes.pop()
+    match.scenes = scenes
+    numbered = screenplay.excerpt(scenes)
+    size, kept = 0, []
+    for ref, ln in numbered:  # a single huge scene: keep its start
+        size += len(ln.text) + len(ln.character) + 6
+        if size > MAX_EXCERPT:
+            break
+        kept.append((ref, ln))
+    ref = translate.ScriptRef([(r, ln.character, ln.text) for r, ln in kept], lang)
+    return ref, kept
 
 
 def output_path(info: MediaInfo, opts: Options, tag: str, fmt: str) -> Path:
@@ -129,12 +174,49 @@ def _write_review(job: Job, opts: Options, translator: str) -> None:
     lines.append("")
     for c in flagged:
         lines.append(f"{_tc(info, c.start)}  ({c.confidence:.0%})  {c.text}")
+    if opts.script:
+        lines += ([""] if lines[-1] else []) + _script_review(job, opts)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     job.outputs.append(path)
 
 
+def _script_review(job: Job, opts: Options) -> list[str]:
+    name = Path(opts.script).name
+    m, guess = job.script_match, job.script_guess
+    if not m:
+        why = (f"best guess {guess.label}, only {guess.coverage:.0%} of key words in common"
+               if guess and guess.words else "too little speech to compare")
+        return [f"Script:      {name}: no scene matched with confidence ({why}).",
+                "             Translated without the script. To use it, give the scene number "
+                "(--scene, or Scene in the window)."]
+    heading = "; ".join(f"{s.label} {s.heading}".strip() for s in m.scenes)
+    how = "set by hand" if m.by_hand else (
+        f"found automatically, {m.coverage:.0%} of key words in common: {', '.join(m.words[:8])}")
+    cues = [c for c in job.script_cues if c.script_match]  # lines already in the target are not compared
+    counts = {k: sum(c.script_match == k for c in cues) for k in ("same", "changed", "none")}
+    out = [f"Script:      {name}, {heading}",
+           f"             ({how})",
+           f"             {len(cues)} lines compared: {counts['same']} as scripted, "
+           f"{counts['changed']} changed, {counts['none']} not in the script"]
+    differ = [c for c in cues if c.script_match in ("changed", "none")]
+    if differ:
+        lang = translate.language_name(cues[0].lang)
+        out += ["", f"Lines that differ from the script ({lang} subtitle, then the script line):"]
+        lookup = {ref: ln for ref, ln in job.script_lines}
+        for c in differ:
+            tc = _tc(job.info, c.start)
+            out.append(f"{tc}  {c.script_match:<8} {c.text}")
+            ln = lookup.get(c.script_ref)
+            if ln:
+                out.append(f"{'':{len(tc) + 2}}script:  {ln.character}: {ln.text}")
+    return out
+
+
 def run(files: list[Path], opts: Options, progress: Progress = print) -> list[Job]:
     translator = validate(opts)
+    script = load_script(opts)
+    if script:
+        progress(script.summary())
     jobs: list[Job] = []
     for f in files:
         try:
@@ -183,18 +265,38 @@ def run(files: list[Path], opts: Options, progress: Progress = print) -> list[Jo
     # Phase 2: translation (LLM in memory, Whisper unloaded).
     if translator == "llm":
         translate.ensure_model(opts.llm_model, progress)
+    note = opts.note
+    if script:
+        names = ", ".join(n.title() for n in script.characters[:40])
+        note = "; ".join(filter(None, [note, f"Characters in the script: {names}"]))
+    finder = screenplay.SceneFinder(script) if script and not opts.scenes else None
     for job in jobs:
         if job.error or job.transcript is None:
             continue
         try:
             draft_segs = job.transcript.english or []
+            draft = " ".join(s.text for s in draft_segs) or None
+            ref = None
+            if script:
+                if opts.scenes:
+                    job.script_match = screenplay.Match(
+                        [script.find(n) for n in opts.scenes], 1.0, [], by_hand=True)
+                else:
+                    job.script_match, job.script_guess = finder.locate(draft or "")
+                if job.script_match:
+                    ref, job.script_lines = _script_ref(job.script_match, script.lang)
+                    progress(f"  following the script: {job.script_match.label}")
+                else:
+                    progress("  no script scene matched with confidence; translating without it")
+            report = script.lang if script and script.lang in opts.targets else opts.targets[0]
             for target in opts.targets:
                 if translator == "llm":
-                    draft = " ".join(s.text for s in draft_segs) or None
                     # Translate speech-timed cues and finalize afterwards, so the reading time
                     # is worked out from the translated text, which usually runs longer.
                     cues = translate.translate_cues(job.speech_cues, target, opts.llm_model,
-                                                    draft, opts.note, progress)
+                                                    draft_segs or None, note, progress, ref)
+                    if ref and target == report:
+                        job.script_cues = cues
                     cues = finalize(cues, job.info.fps)
                 else:  # Whisper's own English translation, with its own timing
                     cues = build_cues(draft_segs)
