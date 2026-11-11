@@ -59,6 +59,47 @@ copy the text in the window and send it to whoever set up MakeSubs for you.
 When it finishes you have a **MakeSubs** shortcut on the desktop (Windows) or in
 `~/Applications` (Mac).
 
+### Upgrading
+
+Running the installer again replaces the installed MakeSubs with the newest version. Your
+settings, the downloaded models and Ollama are kept. **In the middle of a production, try a new
+version first, next to the one you use, and replace it at a natural break.**
+
+**Which version you have**: the window's title bar, or `makesubs --version`.
+
+**Try a new version without installing it** (Mac Terminal or Windows PowerShell):
+
+```bash
+uvx --python 3.12 --from "makesubs @ https://github.com/Wangle-Media/make-english-subs/archive/refs/heads/main.zip" makesubs-gui
+```
+
+This opens the new version's window from a temporary environment. Your installed MakeSubs,
+its shortcut, the models and Ollama aren't touched; close the window and nothing has changed.
+The first start downloads a few hundred MB of components. While you try it:
+
+- Set **Save to** to a test folder, so its files don't mix with, or replace, the ones you've
+  delivered. Both versions share the same settings, so set **Save to** back afterwards,
+  before you use your installed MakeSubs again.
+- New features can download models the first time you use them (following a script: 0.7 GB;
+  the Arabic dialect model: about 6 GB).
+- A new version can time and word subtitles differently from earlier days' files.
+
+**Upgrade**: when the new version works for you, run the installer again (the same command as
+for installing). Re-running the installer later updates MakeSubs again.
+
+**Go back to an earlier version**: every version is kept as a branch called `release-` and
+the version number (`release-0.2.0`, `release-0.3.0`, ...). Run the installer with that branch:
+
+```bash
+# Mac
+curl -fsSL https://raw.githubusercontent.com/Wangle-Media/make-english-subs/main/install/install-mac.sh | MAKESUBS_REF=release-0.2.0 bash
+```
+
+```powershell
+# Windows (PowerShell)
+$env:MAKESUBS_REF = "release-0.2.0"; powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/Wangle-Media/make-english-subs/main/install/install-windows.ps1 | iex"; Remove-Item Env:MAKESUBS_REF
+```
+
 ### Uninstall
 
 **Windows** (PowerShell) / **Mac** (Terminal):

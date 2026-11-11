@@ -56,12 +56,16 @@ if ask "Install it? [Y/n]" Y; then
     # 'makesubs --setup' below downloads the models through Ollama.
 fi
 
-step "Optional: Levantine Arabic dialect model (about 6 GB)"
-echo "Hears Palestinian, Lebanese, Syrian and Jordanian Arabic much better than the standard"
-echo "model. On a Mac it runs on the processor, which adds a few minutes per clip."
 DIALECT=()
-if ask "Download it? [y/N]" N; then
-    DIALECT=(--dialect levantine)
+# Older versions (MAKESUBS_REF=release-...) don't have dialect models.
+help_text="$("$BIN/makesubs" --help 2>/dev/null || true)"
+if [[ "$help_text" == *--dialect* ]]; then
+    step "Optional: Levantine Arabic dialect model (about 6 GB)"
+    echo "Hears Palestinian, Lebanese, Syrian and Jordanian Arabic much better than the standard"
+    echo "model. On a Mac it runs on the processor, which adds a few minutes per clip."
+    if ask "Download it? [y/N]" N; then
+        DIALECT=(--dialect levantine)
+    fi
 fi
 
 step "Downloading and testing the models (several GB, once)"
