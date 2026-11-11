@@ -441,3 +441,53 @@ def test_scene_is_found_from_the_translation_when_whisper_cannot_translate(
     assert not job.error, job.error
     assert job.script_match and job.script_match.scenes[0].number == "2"
     assert "<reference>" not in fake_engines[0]  # no Arabic passed off as an English reference
+
+
+def test_fountain_reads_like_the_pdf():
+    fountain = screenplay.load(DATA / "screenplay.fountain")
+    pdf = screenplay.load(DATA / "screenplay.pdf")
+    lines = lambda sc: [(x.heading, l.character, l.text) for x in sc.scenes for l in x.lines]
+    assert lines(fountain) == lines(pdf) and len(fountain.scenes) == 3
+
+
+def test_flat_text_export(tmp_path):
+    """Like a plain-text export of a Word or Final Draft script: no indentation."""
+    f = tmp_path / "draft.txt"
+    f.write_text(
+        "IN MEMORY OF TIMES TO COME\nManuscript - Someone\n\n"
+        "==========\n\n"
+        "1  EXT. CEMETERY - DAY (PAST)\n\n"
+        "MIMI (10) is walking towards a cemetery.\n\n"
+        "CREDITS BEGIN\n\n"
+        "12  EXT. TERRACE, ALIA'S TOWNHOUSE - DAY\n\n"
+        "ALIA\nWhy so tense?\n\n"
+        "Elias gestures towards the generator.\n\n"
+        "ELIAS (CONT'D)\n(quietly)\nThis.\nIt won't start.\n\n"
+        "12A  INT. KITCHEN - DAY #12A#\n\n"
+        "@McGregor\nHello.\n", encoding="utf-8")
+    sc = screenplay.load(f)
+    assert [(x.number, x.heading) for x in sc.scenes] == [
+        ("12", "EXT. TERRACE, ALIA'S TOWNHOUSE - DAY"), ("12A", "INT. KITCHEN - DAY")]
+    assert [(l.character, l.text) for x in sc.scenes for l in x.lines] == [
+        ("ALIA", "Why so tense?"), ("ELIAS", "This. It won't start."), ("MCGREGOR", "Hello.")]
+    assert sc.all_scenes == 3  # the cemetery scene has no dialogue; "CREDITS BEGIN" isn't a name
+
+
+def test_text_drawn_twice_is_read_once():
+    """Some PDFs draw a (CONT'D) header twice at the same spot (or text twice to fake bold)."""
+    class Page:
+        def extract_text(self, visitor_text):
+            for _ in range(2):
+                visitor_text("ALIA (CONT’D)", [1, 0, 0, 1, 0, 0], [1, 0, 0, 1, 252.0, 774.0], None, 12)
+            visitor_text("Whatever is going on.", [1, 0, 0, 1, 0, 0], [1, 0, 0, 1, 180.0, 762.0], None, 12)
+    lines = screenplay._page_pieces(Page())
+    assert [[t for _, _, t in line] for line in lines] == [["ALIA (CONT’D)"], ["Whatever is going on."]]
+
+
+def test_a_fragment_keeps_its_translation(monkeypatch):
+    """'And I also made...' unmatched, then just 'Baklava.': not the whole script line."""
+    ref = translate.ScriptRef([("S1", "ELIAS", "I also made baklava.")], "en")
+    _fake_model(monkeypatch, {}, lambda t: "same")
+    cues = [Cue(0, 1, "Baklava.", "en", 0.9)]
+    translate.compare_script(cues, ref, "en", progress=lambda s: None)
+    assert (cues[0].text, cues[0].script_ref, cues[0].script_match) == ("Baklava.", "S1", "same")

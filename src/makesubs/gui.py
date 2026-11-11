@@ -247,7 +247,7 @@ class DropList(QListWidget):
     def dropEvent(self, e):
         paths = [Path(u.toLocalFile()) for u in e.mimeData().urls() if u.isLocalFile()]
         for p in paths:  # a dropped screenplay is the script, not a clip
-            if p.is_file() and p.suffix.lower() in (".fdx", ".pdf"):
+            if p.is_file() and p.suffix.lower() in (".fdx", ".pdf", ".fountain"):
                 self.script_dropped.emit(str(p))
         self.add_paths(paths)
 
@@ -257,7 +257,8 @@ class DropList(QListWidget):
             files = sorted(x for x in p.rglob("*") if x.is_file()) if p.is_dir() else [p]
             for f in files:
                 if str(f) not in have and not f.name.startswith(".") \
-                        and f.suffix.lower() not in (".srt", ".txt", ".xml", ".ale", ".fdx", ".pdf"):
+                        and f.suffix.lower() not in (".srt", ".txt", ".xml", ".ale", ".fdx", ".pdf",
+                                                     ".fountain"):
                     item = QListWidgetItem(f"{f.name}    —  {f.parent}")
                     item.setData(Qt.UserRole, str(f))
                     item.setToolTip(str(f))
@@ -526,7 +527,7 @@ class Window(QMainWindow):
 
     def pick_script(self):
         f, _ = QFileDialog.getOpenFileName(self, "Choose the script", "",
-                                           "Screenplays (*.fdx *.pdf);;All files (*)")
+                                           "Screenplays (*.pdf *.fdx *.fountain *.txt);;All files (*)")
         if f:
             self.set_script(f)
 

@@ -58,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--llm-model", default=translate.DEFAULT_MODEL, help="Ollama model name")
     p.add_argument("--note", default="", help="names/places/terms to help translation")
     p.add_argument("--script", type=Path, metavar="FILE",
-                   help="screenplay (.fdx or .pdf): where actors say a scripted line, the "
+                   help="screenplay (.pdf, .fdx, .fountain or .txt): where actors say a scripted line, the "
                         "subtitle follows the script's wording (needs Ollama)")
     p.add_argument("--scene", default="", type=_scene_list, metavar="N",
                    help="script scene number(s) of the clips, e.g. 23 or 23,24 "

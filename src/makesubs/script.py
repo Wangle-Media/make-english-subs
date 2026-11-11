@@ -92,8 +92,11 @@ def _load(path: Path) -> Script:
         scenes = _read_fdx(path)
     elif suffix == ".pdf":
         scenes = _read_pdf(path)
+    elif suffix in TEXT_SUFFIXES:
+        scenes = _read_text(path)
     else:
-        raise RuntimeError(f"{path.name}: scripts must be Final Draft (.fdx) or PDF")
+        raise RuntimeError(f"{path.name}: scripts must be PDF, Final Draft (.fdx), Fountain "
+                           "(.fountain) or plain text (.txt)")
     total = len(scenes)
     scenes = [s for s in scenes if s.lines]
     for i, s in enumerate(scenes):
@@ -114,6 +117,76 @@ _EXTENSION = re.compile(r"\s*\((V\.?\s?O|O\.?\s?S|O\.?\s?C|CONT['’]?D|CONT|FOR
 def _character(name: str) -> str:
     name = _EXTENSION.sub("", name).replace("^", "")
     return " ".join(name.split()).upper()
+
+
+TEXT_SUFFIXES = (".fountain", ".spmd", ".txt")
+SUFFIXES = (".pdf", ".fdx") + TEXT_SUFFIXES
+
+
+def _read_text(path: Path) -> list[Scene]:
+    """A screenplay as plain text: Fountain, or a text export.
+
+    A text export that keeps the page layout (character names indented far in) is read like a
+    PDF; otherwise the Fountain rules apply: a line in capitals after a blank line, with text
+    right under it, is a character name and that text is the speech.
+    """
+    raw = path.read_bytes()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1252", errors="replace")
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)        # Fountain boneyard
+    text = re.sub(r"\[\[.*?\]\]", "", text, flags=re.S)      # Fountain notes
+    rows = [r.rstrip() for r in text.splitlines()]
+    indented = sum(1 for r in rows
+                   if _indent(r) >= 20 and _is_upper(r.strip()) and len(r.strip()) <= 40)
+    if indented >= 5:
+        return parse_layout(_clean(rows))
+    return _parse_fountain(rows)
+
+
+_FOUNTAIN_NUMBER = re.compile(r"\s*#([\w.-]+)#\s*$")
+
+
+def _parse_fountain(rows: list[str]) -> list[Scene]:
+    scenes: list[Scene] = []
+    speaker = ""
+    speech: Line | None = None
+    for i, row in enumerate(rows):
+        s = row.strip()
+        if not s:
+            speaker, speech = "", None
+            continue
+        prev_blank = i == 0 or not rows[i - 1].strip()
+        if prev_blank and (s.startswith(".") and not s.startswith("..") or _HEADING.match(s)):
+            num = _FOUNTAIN_NUMBER.search(s)
+            head = _FOUNTAIN_NUMBER.sub("", s).lstrip(".").strip()
+            m = _HEADING.match(head)
+            if num:
+                number = num.group(1)
+            else:
+                number = (m.group("num") or "") if m else ""
+            heading = m.group("head") if m else head
+            scenes.append(Scene(len(scenes), number, " ".join(heading.split()).upper()))
+            speaker, speech = "", None
+            continue
+        if speaker:
+            if s.startswith("(") and s.endswith(")"):
+                continue  # parenthetical
+            if speech is None:
+                if not scenes:
+                    continue  # title page or notes before the first scene
+                speech = Line(speaker, s)
+                scenes[-1].lines.append(speech)
+            else:
+                speech.text += " " + s
+            continue
+        next_text = i + 1 < len(rows) and rows[i + 1].strip()
+        forced = s.startswith("@")
+        if prev_blank and next_text and (forced or _is_upper(s)) and not s.endswith(":")                 and not s.startswith((">", "=", "-", "#", "!")) and len(s) <= 45 and scenes:
+            speaker = _character(s.lstrip("@"))
+            continue
+    return scenes
 
 
 def _read_fdx(path: Path) -> list[Scene]:
@@ -169,7 +242,9 @@ def _read_pdf(path: Path) -> list[Scene]:
     by its own position on the page avoids that.
     """
     try:
+        import logging
         import pypdf
+        logging.getLogger("pypdf").setLevel(logging.ERROR)  # repairable PDF quirks: not news
         reader = pypdf.PdfReader(path)
         pages = [_page_pieces(p) for p in reader.pages]
         width = _char_width(pages)
@@ -196,8 +271,14 @@ def _page_pieces(page) -> list[list[Piece]]:
             pieces.append((y, x, " ".join(text.splitlines())))
 
     page.extract_text(visitor_text=visit)
+    # The same text drawn again at (almost) the same spot: a repeated (CONT'D) header, or text
+    # drawn twice to fake bold. Keep one copy.
+    unique: list[Piece] = []
+    for y, x, text in pieces:
+        if not any(t == text and abs(y - y2) < 1 and abs(x - x2) < 1 for y2, x2, t in unique):
+            unique.append((y, x, text))
     lines: list[list[Piece]] = []
-    for piece in sorted(pieces, key=lambda p: -p[0]):
+    for piece in sorted(unique, key=lambda p: -p[0]):
         if lines and abs(lines[-1][0][0] - piece[0]) < 3:
             lines[-1].append(piece)
         else:

@@ -109,7 +109,8 @@ better (e.g. a boom on channel 1), pick it.
 `Characters: Nidal, Yasmin. Places: Jenin, Nablus.` This helps the translator spell them right.
 
 **Script** (optional, needs the high-quality translator): click **Choose…** and pick the
-screenplay, a PDF or a Final Draft file (`.fdx`), or drop it on the clip list. Where an actor
+screenplay (a PDF, a Final Draft `.fdx`, a Fountain `.fountain`, or a plain-text export), or
+drop it on the clip list. Where an actor
 says a scripted line, the subtitle then uses the script's wording; lines the actor changed or
 improvised are translated as spoken, and listed in `review.txt` next to the script line. See
 [Following the script](#following-the-script). **None** switches it off.
@@ -382,7 +383,7 @@ The timecode on each review line takes you straight to the spot in the source cl
 | `-c`, `--channel N` | `mix` | `mix` averages all audio, or a channel number as listed by `--info`. |
 | `-o`, `--out FOLDER` | next to clip | Write subtitle files into this folder (created if missing). |
 | `--note TEXT` | | Names, places and terms for the translator. |
-| `--script FILE` | | Screenplay (`.fdx` or `.pdf`) to follow, see [Following the script](#following-the-script). Needs the high-quality translator. |
+| `--script FILE` | | Screenplay (`.pdf`, `.fdx`, `.fountain` or `.txt`) to follow, see [Following the script](#following-the-script). Needs the high-quality translator. |
 | `--scene N` | found per clip | Script scene number(s) of the clips, e.g. `23` or `23,24`. |
 | `--script-info` | | Only show what MakeSubs reads from `--script`. |
 | `--avid-start TC` | clip source TC | Sequence start timecode for SubCap files, e.g. `01:00:00:00`. |
@@ -420,7 +421,9 @@ all clips succeeded and 1 if any failed, so it can be used in scripts.
   in the wrong language.
 - **Scripts**: PDFs are read from where each piece of text sits on the page, which works for
   standard screenplay formatting from Final Draft, WriterDuet, Word and the like, but not for
-  scanned pages or side-by-side (dual) dialogue (the `.fdx` handles those). Finding the scene
+  scanned pages or side-by-side (dual) dialogue (the `.fdx` handles those). Plain text is read
+  as Fountain (a character name in capitals with the speech right under it) or, if it keeps
+  the page layout, like a PDF. Finding the scene
   uses the English translation, so it works best when the script is in English and English is
   one of the subtitle languages; otherwise, pick the scene. The translator decides what counts as "as
   scripted" and leans towards "changed" when unsure, so check `review.txt` on important
