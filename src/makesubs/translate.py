@@ -458,10 +458,10 @@ def compare_script(cues: list[Cue], script: ScriptRef, target: str, model: str =
         if not new or _similarity(c.text, new) < 0.5 or _facts(c.text) != _facts(new):
             c.script_match = "changed"  # not clearly what was said: keep the translation
             continue
-        # only a fragment of the sentence ("baklava"): it keeps its translation
+        # only a fragment of the sentence ("a cake"): it keeps its translation
         whole = len(_words(c.text)) >= 0.6 * len(_words(new))
         planned.append((c, new, {(c.script_ref, j) for j in range(hit[0], hit[-1] + 1)}, whole))
-    # A script sentence said over several subtitles ("I also made" / "baklava") can't be split
+    # A script sentence said over several subtitles ("I also baked" / "a cake") can't be split
     # between them: those keep their translations rather than all showing the whole sentence.
     claimed: dict = {}
     for _c, _new, spans, _whole in planned:
@@ -511,7 +511,7 @@ def _find_in_script(cues: list[Cue], script: ScriptRef, target: str, model: str,
                 c.script_match, c.script_ref = ans.match, ans.script_ref
 
 
-MEANING_FLOOR = 0.55  # meaning similarity below this is no match (measured on IMOTTC sc. 69)
+MEANING_FLOOR = 0.55  # meaning similarity below this is no match (measured on real dailies)
 SURE_MEANING = 0.70   # this close, a pair the model rejects is kept as "changed" (same scene)
 EMBED_MODEL = "mxbai-embed-large"  # sentence embeddings (~670 MB), for matching by meaning
 
@@ -555,7 +555,7 @@ def align(said: list[str], scripted: list[str],
     subtitles in a row may share one script line (a line said over several subtitles).
     It scores pairs on meaning (similarity of sentence embeddings, `meaning[i][k]`) helped by
     shared words, or on shared words alone when there are no embeddings. Actors reword a lot,
-    so meaning finds far more: "It's out of season" for "...out of sync with the seasons".
+    so meaning finds far more: "We're leaving at first light" for "We sail at dawn".
     Returns the script line index per subtitle, or None.
     """
     n, m = len(said), len(scripted)

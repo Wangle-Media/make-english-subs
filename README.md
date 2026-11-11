@@ -140,10 +140,9 @@ spoken, tick just that one. Tick *Don't know — auto-detect* only when you real
 **Arabic speech** (shown when Arabic is ticked): *Standard model*, or the *Levantine Arabic
 dialect model* for Palestinian, Lebanese, Syrian and Jordanian Arabic. The dialect model
 ([WhisperLevantine](https://huggingface.co/HebArabNlpProject/WhisperLevantine), Whisper large-v3
-fine-tuned on about 1,200 hours of Levantine Arabic) hears the dialect much better. On a
-Palestinian Arabic scene it got "You've been sleeping a lot" and "The olive trees have bloomed
-again" where the standard model heard "You're sleeping on it" and "Zatoun returned to Zahar".
-It can't write English or translate, so the standard model still detects the languages,
+fine-tuned on about 1,200 hours of Levantine Arabic) hears the dialect much better: on
+Palestinian Arabic dailies it got noticeably more lines right, and marked about half as many
+lines `[?]`. It can't write English or translate, so the standard model still detects the languages,
 writes the English, and makes the rough English draft; the dialect model then transcribes
 only the Arabic, in a second pass. The first run with it downloads about 6 GB, unless the
 installer already did; then it is chosen by default. On a Mac it runs on the processor (the
@@ -253,7 +252,7 @@ The script is read for its dialogue, scene by scene. For each clip, in three ste
 2. Each subtitle is paired with the script line it most likely is, by meaning (a small
    sentence-embedding model, `mxbai-embed-large`, through Ollama) and shared words, keeping
    the script's order. Actors reword a lot, so meaning finds far more than words alone:
-   "It's out of season" is "...out of sync with the seasons". Subtitles that match nothing,
+   "We're leaving at first light" is "We sail at dawn". Subtitles that match nothing,
    like crew talk, stay unpaired.
 3. The translator checks every pair and decides whether the actor said the line **as
    scripted**, **changed** it, or said something **not in the script**.
@@ -264,7 +263,7 @@ The script is read for its dialogue, scene by scene. For each clip, in three ste
 - Changed or not in the script: translated as actually said. The subtitle shows what is in
   the take, never script text that wasn't spoken.
 
-On two takes of a Palestinian Arabic scene that the actors reworded a lot, this found 26 of
+On two test takes in Palestinian Arabic that the actors reworded a lot, this found 26 of
 39 and 29 of 37 scripted lines, without a single wrong pairing; most of the rest were lines
 the speech recognition misheard.
 
@@ -488,7 +487,7 @@ all clips succeeded and 1 if any failed, so it can be used in scripts.
 - **Dialect and scratch audio**: tested on Levantine Arabic (Palestinian, Syrian, Lebanese),
   including real Palestinian Arabic dailies. Clean speech is transcribed well; the dialect
   model helps a lot with Levantine Arabic, but dialect words still trip up the translation
-  now and then (an untranslated "Al-Khareef" for autumn, say). Heavily noisy or distant audio
+  now and then (a dialect word left untranslated, say). Heavily noisy or distant audio
   can produce invented text; that is what the `[?]` marks are for. Validate on real
   camera-test footage before principal photography.
 - **Language switches inside a sentence**: language is detected per stretch of speech (up to
