@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__, languages, translate
-from .asr import DIALECTS
+from .asr import DIALECTS, dialect_installed
 from . import script as screenplay
 from .pipeline import Options, run
 
@@ -350,9 +350,11 @@ class Window(QMainWindow):
             self.dialect.addItem(f"{name}: dialect model", key)
         self.dialect_label = QLabel("Arabic speech:")
         form.addRow(self.dialect_label, self.dialect)
+        where = (" On a Mac it runs on the processor, which adds a few minutes per clip."
+                 if sys.platform == "darwin" else "")
         self.dialect_hint = QLabel("The dialect model hears Palestinian, Lebanese, Syrian and "
-                                   "Jordanian Arabic much better. It adds a second pass and a "
-                                   "one-time download of about 6 GB.")
+                                   "Jordanian Arabic much better. It adds a second pass, and "
+                                   "the first time a download of about 6 GB." + where)
         self.dialect_hint.setWordWrap(True)
         self.dialect_hint.setStyleSheet("color: gray")
         form.addRow("", self.dialect_hint)
@@ -460,7 +462,10 @@ class Window(QMainWindow):
                                 if s.value(k, d, bool)] + _split(s.value("t_other", "")))
         self.targets.set_codes(_split(targets))
         self.channel.setCurrentIndex(max(0, self.channel.findData(s.value("channel", "mix"))))
-        self.dialect.setCurrentIndex(max(0, self.dialect.findData(s.value("dialect", "") or None)))
+        dialect = s.value("dialect", None)
+        if dialect is None:  # never chosen: use a dialect model the installer downloaded
+            dialect = next((k for k in sorted(DIALECTS) if dialect_installed(k)), "")
+        self.dialect.setCurrentIndex(max(0, self.dialect.findData(dialect or None)))
         self.f_srt.setChecked(s.value("f_srt", True, bool))
         self.f_avid.setChecked(s.value("f_avid", False, bool))
         self.note.setText(s.value("note", ""))
@@ -517,7 +522,8 @@ class Window(QMainWindow):
         elif script:
             self.script_hint.setText("Where an actor says a scripted line, the subtitle follows "
                                      "the script's wording. Changed and improvised lines are "
-                                     "translated as spoken and listed in review.txt.")
+                                     "translated as spoken and listed in review.txt. The first "
+                                     "run with a script downloads a small model (0.7 GB).")
             self.script_hint.setStyleSheet("color: gray")
         if hasattr(self, "script_hint"):
             self.script_hint.setVisible(bool(script))
