@@ -177,18 +177,18 @@ def test_translate_cues_with_script(monkeypatch):
 
 
 def test_align_keeps_the_script_order():
-    script = ["Hummus, vine leaves, tabbouleh.", "My favourite.", "You've been sleeping a lot.",
-              "It's not about us, Elias, it's about everything.",
-              "Whatever is going on is much bigger than you and me.",
-              "You haven't been yourself lately."]
-    said = ["Action!", "Hummus, vine leaves and tabbouleh.", "You're sleeping a lot.",
-            "I feel they're moving.",                       # crew talk: shares nothing useful
-            "It's not just about us, it's about everyone.",
-            "What's happening here is bigger than me and you, Elias.",
-            "You haven't been yourself lately, you know."]
+    script = ["Bread, cheese, olives and tea.", "My favourite.", "You've been working too much.",
+              "It's not about the money, Nidal, it's about everything.",
+              "Whatever happens next is bigger than the two of us.",
+              "You haven't called your mother lately."]
+    said = ["Action!", "Bread, cheese and olives and tea.", "You're working too much.",
+            "I feel the lens is moving.",                   # crew talk: shares nothing useful
+            "It's not just about money, it's about everyone.",
+            "What happens next is bigger than us two, Nidal.",
+            "You haven't called your mother lately, you know."]
     assert translate.align(said, script) == [None, 0, 2, None, 3, 4, 5]
     # repeated takes of a line after the scene moved on are not pulled back
-    assert translate.align(["My favourite.", "You've been sleeping a lot."], script) == [1, 2]
+    assert translate.align(["My favourite.", "You've been working too much."], script) == [1, 2]
 
 
 def test_facts():
@@ -337,39 +337,39 @@ def test_pdf_pieces_word_export():
     word spaces drawn as gaps. Lines are 12 pt apart, a blank line 24."""
     w = 7.0
     page = [
-        _line(700, (8, "12"), (15, "12"), (15 + 2, "EXT. TERRACE, ALIA’S"), (38, "TOWNHOUSE - DAY")),
-        _line(676, (15, "Alia enters the terrace.")),
-        _line(652, (35, "ALIA")),
-        _line(640, (25, "Why so tense"), (37, "?")),          # punctuation touches
-        _line(616, (35, "ELIAS (CONT’D)")),
-        _line(604, (25, "I unclogged the"), (41, "carbu"), (46, "retor.")),  # colour split
-        _line(592, (25, "Maybe you didn’t tighten it"), (25 + 28, "enough.")),  # gap = space
+        _line(700, (8, "12"), (15, "12"), (15 + 2, "EXT. TERRACE, OMAR’S"), (38, "HOUSE - DAY")),
+        _line(676, (15, "Omar walks onto the terrace.")),
+        _line(652, (35, "OMAR")),
+        _line(640, (25, "Why so quiet"), (37, "?")),          # punctuation touches
+        _line(616, (35, "LAYLA (CONT’D)")),
+        _line(604, (25, "I unblocked the"), (41, "chimn"), (46, "ey.")),  # colour split
+        _line(592, (25, "Maybe you didn’t sweep it"), (25 + 26, "properly.")),  # gap = space
     ]
-    page[0] = [(700, 8 * w, "12"), (700, 15 * w, "12"), (700, 18 * w, "EXT. TERRACE, ALIA’S"),
-               (700, 39 * w, "TOWNHOUSE - DAY")]
+    page[0] = [(700, 8 * w, "12"), (700, 15 * w, "12"), (700, 18 * w, "EXT. TERRACE, OMAR’S"),
+               (700, 39 * w, "HOUSE - DAY")]
     assert screenplay._char_width([page]) == w
     rows = screenplay._clean(screenplay._page_rows(page, w))
     scenes = screenplay.parse_layout(rows)
-    assert [(s.number, s.heading) for s in scenes] == [("12", "EXT. TERRACE, ALIA’S TOWNHOUSE - DAY")]
+    assert [(s.number, s.heading) for s in scenes] == [("12", "EXT. TERRACE, OMAR’S HOUSE - DAY")]
     assert [(ln.character, ln.text) for ln in scenes[0].lines] == [
-        ("ALIA", "Why so tense?"),
-        ("ELIAS", "I unclogged the carburetor. Maybe you didn’t tighten it enough.")]
+        ("OMAR", "Why so quiet?"),
+        ("LAYLA", "I unblocked the chimney. Maybe you didn’t sweep it properly.")]
 
 
 def test_heading_with_glued_scene_numbers():
-    rows = ["        4a 4aINT. DARK SPACE - DAY", "", "                    ALIA",
-            "          Hello?", "", "        GREEN"]
+    rows = ["        4a 4aINT. CELLAR - NIGHT", "", "                    OMAR",
+            "          Hello?", "", "        BLUE"]
     assert [(s.number, s.heading) for s in screenplay.parse_layout(rows)] == [
-        ("4a", "INT. DARK SPACE - DAY")]
+        ("4a", "INT. CELLAR - NIGHT")]
 
 
 def test_title_page_is_not_dialogue():
     pad = " " * 10  # action margin; dialogue 10 further in, character names 22
-    rows = [pad + " " * 22 + "GREEN", pad + " " * 10 + "With locked scene numbers", "",
-            "1" + " " * 9 + "INT. KITCHEN - NIGHT", "", pad + " " * 22 + "ALIA",
+    rows = [pad + " " * 22 + "BLUE", pad + " " * 10 + "With locked scene numbers", "",
+            "1" + " " * 9 + "INT. KITCHEN - NIGHT", "", pad + " " * 22 + "OMAR",
             pad + " " * 10 + "Hello?"]
     scenes = screenplay.parse_layout(rows)
-    assert [s.number for s in scenes] == ["1"] and scenes[0].lines[0].character == "ALIA"
+    assert [s.number for s in scenes] == ["1"] and scenes[0].lines[0].character == "OMAR"
 
 
 def test_script_wording_for_a_line_split_over_subtitles(monkeypatch):
@@ -407,9 +407,9 @@ def test_each_batch_sees_only_its_own_part_of_the_draft(monkeypatch):
     seen = []
     monkeypatch.setattr(translate, "_generate", lambda m, p, n=8192: seen.append(p) or _answers(
         p, lambda k, v: translate.parse_answer("x")))
-    draft = [Segment(0, 2, " Action!", "en", []), Segment(10, 12, " Hummus and vine leaves.", "en", []),
+    draft = [Segment(0, 2, " Action!", "en", []), Segment(10, 12, " Bread and cheese.", "en", []),
              Segment(30, 32, " Something is off.", "en", [])]
-    cues = [Cue(0, 2, "أكشن", "ar", 0.9), Cue(10, 12, "حمص", "ar", 0.9), Cue(30, 32, "في اشي", "ar", 0.9)]
+    cues = [Cue(0, 2, "أكشن", "ar", 0.9), Cue(10, 12, "خبز", "ar", 0.9), Cue(30, 32, "في اشي", "ar", 0.9)]
     translate.translate_cues(cues, "en", draft=draft, progress=lambda s: None)
     assert "Action!" in seen[0] and "Something is off" not in seen[0]
     assert "Something is off." in seen[-1] and "Action!" not in seen[-1]
