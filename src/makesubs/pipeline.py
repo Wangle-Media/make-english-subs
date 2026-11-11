@@ -309,6 +309,11 @@ def run(files: list[Path], opts: Options, progress: Progress = print) -> list[Jo
     # Phase 2: translation (LLM in memory, Whisper unloaded).
     if translator == "llm":
         translate.ensure_model(opts.llm_model, progress)
+        if script:
+            try:  # matching subtitles to the script by meaning; without it, by shared words
+                translate.ensure_model(translate.EMBED_MODEL, progress)
+            except Exception as e:  # noqa: BLE001 - optional
+                progress(f"  ({translate.EMBED_MODEL} not available, matching on words: {e})")
     note = opts.note
     if script:
         names = ", ".join(n.title() for n in script.characters[:40])
@@ -364,4 +369,6 @@ def run(files: list[Path], opts: Options, progress: Progress = print) -> list[Jo
             progress(f"ERROR {job.info.path.name}: {e}")
     if translator == "llm":
         translate.unload(opts.llm_model)
+        if script:
+            translate.unload(translate.EMBED_MODEL)
     return jobs

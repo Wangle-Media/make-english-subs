@@ -116,6 +116,7 @@ def setup(args) -> int:
         engine.unload()
     if translate.available():
         translate.ensure_model(args.llm_model)
+        translate.ensure_model(translate.EMBED_MODEL)  # for following a script
         print(f"OK: translation model {args.llm_model}")
     else:
         print("Ollama is not running: only English (basic) translation is available.")

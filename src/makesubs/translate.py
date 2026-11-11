@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import urllib.error
@@ -17,7 +18,7 @@ HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 if not HOST.startswith("http"):
     HOST = "http://" + HOST
 
-BATCH = 40
+BATCH = 12           # lines per request: in longer lists the model loses count of lines
 COMPARE_BATCH = 20   # smaller: matching against the script drifts more on long lists
 CONTEXT = 6
 
@@ -46,7 +47,7 @@ def ensure_model(model: str, progress: Callable[[str], None] = print) -> None:
         names = {m["name"] for m in json.load(r).get("models", [])}
     if model in names or f"{model}:latest" in names:
         return
-    progress(f"Downloading translation model {model} (one-time, several GB)...")
+    progress(f"Downloading the model {model} (one-time)...")
     last = ""
     with _call("/api/pull", {"model": model, "stream": True}, timeout=None) as r:
         for line in r:
@@ -62,8 +63,13 @@ def ensure_model(model: str, progress: Callable[[str], None] = print) -> None:
 
 
 def unload(model: str) -> None:
+    if model == EMBED_MODEL:  # an embedding model is unloaded through the embed endpoint
+        # (an empty input is ignored, model and all: it needs something to embed)
+        path, payload = "/api/embed", {"model": model, "input": ".", "keep_alive": 0}
+    else:
+        path, payload = "/api/generate", {"model": model, "keep_alive": 0}
     try:
-        with _call("/api/generate", {"model": model, "keep_alive": 0}, timeout=30):
+        with _call(path, payload, timeout=30):
             pass
     except (urllib.error.URLError, OSError):
         pass
@@ -171,9 +177,25 @@ def _prompt(lines: dict[str, str], target: str, context: list[str], draft: str |
              f"Every output line must be written in {lang}. Keep names, places and numbers. Keep "
              "one output line per input line: do not merge, split, reorder or skip lines. If a "
              "line is unintelligible, translate what you can.\n"
-             "Return ONLY a JSON object mapping each line number to its translation, with "
-             "exactly the same keys.")
+             "Return ONLY a JSON object with exactly the same keys, mapping each line number to "
+             '{"first": the first word of that input line, copied exactly as written, '
+             '"text": its translation}.')
     parts.append(rules + "\n\n" + json.dumps(lines, ensure_ascii=False, indent=0))
+    return "\n\n".join(parts)
+
+
+def _single_prompt(line: str, target: str, note: str, source_langs: list[str]) -> str:
+    """One line on its own: a simpler request, for lines a batch got wrong."""
+    spoken = " or ".join(language_name(c) for c in source_langs) or "another language"
+    lang = language_name(target)
+    parts = [f"Translate this line of film dialogue, spoken in {spoken} (possibly a regional "
+             "dialect, from automatic speech recognition), into natural, concise "
+             f"{lang} for a subtitle. Translate it even if it is short, a fragment or a single "
+             f"word; write it in {lang}, never copy the original."]
+    if note:
+        parts.append(f"Production notes (names, places, terms): {note}")
+    parts.append(f'Return ONLY a JSON object: {{"text": the {lang} translation}}.\n\n'
+                 f"Line: {line}")
     return "\n\n".join(parts)
 
 
@@ -196,6 +218,7 @@ class Answer:
     text: str
     script_ref: str = ""
     match: str = ""
+    first: str = ""      # the source line's first word, copied back as an anchor
 
 
 _MATCHES = ("same", "changed", "none")
@@ -213,25 +236,32 @@ def parse_answer(value) -> Answer:
         match = match if match in _MATCHES else ("none" if not ref else "")
         if match == "none":
             ref = ""
-        return Answer(text, ref, match)
+        return Answer(text, ref, match, str(value.get("first") or "").strip())
     return Answer(str(value).strip() if value is not None else "")
 
 
-def _generate_raw(model: str, prompt: str, num_ctx: int = 8192) -> dict:
+def _generate_raw(model: str, prompt: str, num_ctx: int = 8192, temperature: float = 0.2) -> dict:
     # think=False: models that reason before answering (Qwen3 and the like) are much slower
     # with it and can break the JSON; models without it reject the setting, so retry without.
     payload = {"model": model, "prompt": prompt, "stream": False, "format": "json",
                "think": False, "keep_alive": "5m",
-               "options": {"temperature": 0.2, "num_ctx": num_ctx}}
-    try:
-        r = _call("/api/generate", payload)
-    except urllib.error.HTTPError as e:
-        if e.code != 400:
-            raise
-        payload.pop("think")
-        r = _call("/api/generate", payload)
-    with r:
-        body = json.load(r)
+               "options": {"temperature": temperature, "num_ctx": num_ctx}}
+    body = None
+    for attempt in range(3):
+        try:
+            with _call("/api/generate", payload) as r:
+                body = json.load(r)
+            break
+        except urllib.error.HTTPError as e:
+            if e.code == 400 and "think" in payload:
+                payload.pop("think")
+            elif e.code < 500:
+                raise
+            # 5xx: the server choked on this one request (a broken reply, say): try again, and
+            # in the end give up on this request (its lines are retried or marked for review)
+            # rather than on the whole clip
+    if body is None:
+        return {}
     try:
         out = json.loads(body.get("response", ""))
     except json.JSONDecodeError:
@@ -239,8 +269,10 @@ def _generate_raw(model: str, prompt: str, num_ctx: int = 8192) -> dict:
     return {str(k): v for k, v in out.items()} if isinstance(out, dict) else {}
 
 
-def _generate(model: str, prompt: str, num_ctx: int = 8192) -> dict[str, Answer]:
-    return {k: parse_answer(v) for k, v in _generate_raw(model, prompt, num_ctx).items()}
+def _generate(model: str, prompt: str, num_ctx: int = 8192,
+              temperature: float = 0.2) -> dict[str, Answer]:
+    return {k: parse_answer(v)
+            for k, v in _generate_raw(model, prompt, num_ctx, temperature).items()}
 
 
 def _batches(n: int, size: int | None = None) -> list[range]:
@@ -275,8 +307,12 @@ def translate_cues(cues: list[Cue], target: str, model: str = DEFAULT_MODEL,
     script can only replace a line's wording when the line says what the script says.
     """
     out = [Cue(c.start, c.end, c.text, target, c.confidence, c.flagged) for c in cues]
-    todo = [i for i, c in enumerate(cues) if c.lang != target]
+    # A line labelled as the target language but written in another alphabet was labelled
+    # wrongly (Arabic speech detected as English): translate it too.
+    todo = [i for i, c in enumerate(cues)
+            if c.lang != target or (target in _LATIN and _foreign_script(c.text))]
     done_context: list[str] = []
+    last = ("", "")  # (source, translation) of the line before this batch
     for rng in _batches(len(todo)):
         idx = [todo[k] for k in rng]
         progress(f"  translating to {language_name(target)}: lines {rng.start + 1}-{rng.stop} of {len(todo)}")
@@ -285,23 +321,88 @@ def translate_cues(cues: list[Cue], target: str, model: str = DEFAULT_MODEL,
         part = _draft_for(draft, cues[idx[0]].start, cues[idx[-1]].end)
         prompt = _prompt(lines, target, done_context[-CONTEXT:], part, note, langs)
         result = _generate(model, prompt)
-        bad = [k for k in lines if k not in result or not result[k].text
-               or (target != "en" and cues[idx[int(k) - 1]].lang != "en"
-                   and _looks_english(result[k].text))]
-        if bad:  # retry once, only the empty / wrong-language lines, without the English draft
-            retry = _generate(model, _prompt({k: lines[k] for k in bad}, target,
-                                             done_context[-CONTEXT:], None, note, langs))
-            result.update({k: v for k, v in retry.items() if v.text})
+        lang_of = {k: cues[idx[int(k) - 1]].lang for k in lines}
+        bad = [k for k in lines if not _good(result.get(k), lines[k], target, lang_of[k])]
+        if len(bad) > len(lines) / 2:
+            # mostly missing (the model stopped after a line or two): a glitch; once more
+            again = _generate(model, prompt)
+            for k in list(bad):
+                if _good(again.get(k), lines[k], target, lang_of[k]):
+                    result[k] = again[k]
+                    bad.remove(k)
+        # A line answered with its neighbour's translation (the anchor right, the text the line
+        # before's): unless the two lines say the same thing, it's the wrong text.
+        prev = last
+        for k in lines:
+            ans = result.get(k)
+            if ans and ans.text and k not in bad and ans.text.strip() == prev[1].strip() \
+                    and _anchor(lines[k]) != _anchor(prev[0]):
+                bad.append(k)
+            prev = (lines[k], ans.text if ans and ans.text and k not in bad else "")
+        # The rest (an anchor that doesn't match its line, a skipped line, the wrong language):
+        # one at a time, without the draft or earlier subtitles, so nothing else can bleed in.
+        for k in bad:
+            result.pop(k, None)
+            for temperature in (0.2, 0.7):
+                retry = _generate(model, _single_prompt(lines[k], target, note, langs),
+                                  temperature=temperature).get("text")
+                if retry and _good(retry, lines[k], target, lang_of[k], anchored=False):
+                    result[k] = retry
+                    break
         for n, i in enumerate(idx):
             ans = result.get(str(n + 1))
             if ans and ans.text:
                 out[i].text = ans.text
+                done_context.append(out[i].text)
             else:
-                out[i].flagged = True  # leave source text, mark for review
-            done_context.append(out[i].text)
+                # leave the source text, marked for review; and out of the context, where an
+                # untranslated line invites the model to copy the next ones too
+                out[i].flagged = True
+        last = (cues[idx[-1]].text, out[idx[-1]].text)
     if script:
         compare_script(out, script, target, model, progress)
     return out
+
+
+_LATIN = {"en", "da", "sv", "no", "nb", "nn", "de", "nl", "fr", "es", "it", "pt", "fi", "is",
+          "pl", "cs", "ro", "hu", "tr", "id", "ms", "vi"}  # subtitle languages in Latin letters
+
+
+def _foreign_letters(text: str) -> int:
+    """Letters outside the Latin alphabet (Arabic, Hebrew, Cyrillic...)."""
+    return sum(c.isalpha() and ord(c) > 0x24F for c in text)
+
+
+def _foreign_script(text: str) -> bool:
+    """Mostly letters outside the Latin alphabet."""
+    letters = sum(c.isalpha() for c in text)
+    return bool(letters) and _foreign_letters(text) > letters / 2
+
+
+def _anchor(text: str) -> str:
+    """A word reduced for comparison: letters and digits only, Arabic diacritics dropped."""
+    text = re.sub(r"[\u064B-\u0652\u0640]", "", text)  # tashkeel and tatweel
+    return re.sub(r"[^\w]", "", text).lower()
+
+
+def _good(ans: Answer | None, source: str, target: str, source_lang: str,
+          anchored: bool = True) -> bool:
+    """Whether an answer is a usable translation of its source line."""
+    if not ans or not ans.text:
+        return False
+    if target in _LATIN and _foreign_script(source) and _foreign_letters(ans.text) >= 4:
+        return False  # left (partly) untranslated
+    if target != "en" and source_lang != "en" and _looks_english(ans.text):
+        return False  # English instead of the target language
+    if anchored and ans.first:
+        # the copied first word must be one of the line's first words (models drop a short
+        # one now and then); anything else means the answer belongs to another line
+        heads = [_anchor(w) for w in source.split()[:3]]
+        first = _anchor(ans.first.split()[0]) if ans.first.split() else ""
+        if first and not any(h and (h == first or h.startswith(first) or first.startswith(h))
+                             for h in heads):
+            return False
+    return True
 
 
 def compare_script(cues: list[Cue], script: ScriptRef, target: str, model: str = DEFAULT_MODEL,
@@ -310,9 +411,9 @@ def compare_script(cues: list[Cue], script: ScriptRef, target: str, model: str =
     said as scripted.
 
     When the script is in the subtitle language, the code pairs each subtitle with a script
-    line (align: shared words, script order) and the model only judges each pair; asked to
-    find the lines itself, it loses its place on a long scene. Otherwise the model finds them,
-    and the subtitles keep their translated wording.
+    line (align: meaning and shared words, script order) and the model only judges each pair;
+    asked to find the lines itself, it loses its place on a long scene. Otherwise the model
+    finds them, and the subtitles keep their translated wording.
     """
     for c in cues:
         c.script_match, c.script_ref = "none", ""
@@ -321,8 +422,11 @@ def compare_script(cues: list[Cue], script: ScriptRef, target: str, model: str =
         return
     refs = [ref for ref, _, _ in script.lines]
     texts = [said for _, _, said in script.lines]
-    paired = [(c, k) for c, k in zip(cues, align([c.text for c in cues], texts))
-              if k is not None and not c.flagged]
+    said = [c.text for c in cues]
+    meaning = meaning_matrix(said, texts)
+    pairs_at = {id(c): (i, k) for i, (c, k) in enumerate(zip(cues, align(said, texts, meaning)))}
+    paired = [(c, pairs_at[id(c)][1]) for c in cues
+              if pairs_at[id(c)][1] is not None and not c.flagged]
     for rng in _batches(len(paired), COMPARE_BATCH):
         batch = paired[rng.start:rng.stop]
         progress(f"  comparing with the script: {rng.start + 1}-{rng.stop} of {len(paired)} "
@@ -333,6 +437,11 @@ def compare_script(cues: list[Cue], script: ScriptRef, target: str, model: str =
             v = verdicts.get(str(n + 1))
             v = (v.get("match") if isinstance(v, dict) else v) or ""
             v = str(v).strip().lower()
+            i = pairs_at[id(c)][0]
+            if v == "none" and meaning is not None and meaning[i][k] >= SURE_MEANING:
+                # The model tends to reject a subtitle that says only part of a long line;
+                # this close in meaning it's that line: listed as changed, wording kept.
+                v = "changed"
             if v in ("same", "changed"):
                 c.script_match, c.script_ref = v, refs[k]
 
@@ -370,6 +479,8 @@ def _judge_prompt(pairs: dict[str, dict]) -> str:
         "Each numbered item pairs a subtitle of what an actor ACTUALLY said with the script line "
         "it was matched to. The subtitles are a translation of a translation and come from "
         "speech recognition, so the words are almost never identical: judge the meaning.\n"
+        "A subtitle often says only one part of a long script line, or puts it in other words; "
+        "that part is still this line: judge only whether what the subtitle says matches it.\n"
         "- \"same\": the subtitle says what the script line says, or part of it.\n"
         "- \"changed\": it is the script line, but the actor changed the meaning: another "
         "number, time, day, month, name, place or person, or something added or left out "
@@ -400,13 +511,52 @@ def _find_in_script(cues: list[Cue], script: ScriptRef, target: str, model: str,
                 c.script_match, c.script_ref = ans.match, ans.script_ref
 
 
-def align(said: list[str], scripted: list[str]) -> list[int | None]:
+MEANING_FLOOR = 0.55  # meaning similarity below this is no match (measured on IMOTTC sc. 69)
+SURE_MEANING = 0.70   # this close, a pair the model rejects is kept as "changed" (same scene)
+EMBED_MODEL = "mxbai-embed-large"  # sentence embeddings (~670 MB), for matching by meaning
+
+
+def embed(texts: list[str], model: str = EMBED_MODEL) -> list[list[float]]:
+    with _call("/api/embed", {"model": model, "input": texts, "keep_alive": "5m"}) as r:
+        return json.load(r)["embeddings"]
+
+
+def meaning_matrix(said: list[str], scripted: list[str]) -> list[list[float]] | None:
+    """Similarity in meaning of each subtitle to each script line (its closest sentence), or
+    None when the embedding model can't be used (then matching falls back to shared words)."""
+    if not said or not scripted:
+        return None
+    sentences = [_sentences(t) or [t] for t in scripted]
+    flat = [s for ss in sentences for s in ss]
+    try:
+        vecs = embed(said + flat)
+    except (urllib.error.URLError, OSError, KeyError, ValueError):
+        return None
+    if len(vecs) != len(said) + len(flat):
+        return None
+    unit = []
+    for v in vecs:
+        n = math.sqrt(sum(x * x for x in v)) or 1.0
+        unit.append([x / n for x in v])
+    subs, lines, pos = unit[:len(said)], [], len(said)
+    for ss in sentences:
+        lines.append(unit[pos:pos + len(ss)])
+        pos += len(ss)
+    return [[max(sum(a * b for a, b in zip(s, v)) for v in line) for line in lines]
+            for s in subs]
+
+
+def align(said: list[str], scripted: list[str],
+          meaning: list[list[float]] | None = None) -> list[int | None]:
     """Pair each subtitle with the script line it most likely says, keeping the script's order.
 
     Actors mostly follow the script but skip, improvise and repeat lines, so this is a
-    sequence alignment on shared words: subtitles may stay unpaired, script lines may be
-    skipped, and several subtitles in a row may share one script line (a line said over
-    several subtitles). Returns the script line index per subtitle, or None.
+    sequence alignment: subtitles may stay unpaired, script lines may be skipped, and several
+    subtitles in a row may share one script line (a line said over several subtitles).
+    It scores pairs on meaning (similarity of sentence embeddings, `meaning[i][k]`) helped by
+    shared words, or on shared words alone when there are no embeddings. Actors reword a lot,
+    so meaning finds far more: "It's out of season" for "...out of sync with the seasons".
+    Returns the script line index per subtitle, or None.
     """
     n, m = len(said), len(scripted)
     words_a = [_words(t) for t in said]
@@ -414,6 +564,11 @@ def align(said: list[str], scripted: list[str]) -> list[int | None]:
     one_sentence = [len(_sentences(t)) <= 1 for t in scripted]
 
     def gain(i, k):
+        if meaning is not None:
+            g = meaning[i][k] - MEANING_FLOOR
+            if meaning[i][k] > MEANING_FLOOR - 0.05:
+                g += 0.2 * _similarity(said[i], scripted[k])
+            return max(g, 0.0)
         a, b = words_a[i], words_b[k]
         shared = len(a & b)
         if not a or not b:  # no content words ("Us?"): only the very same line pairs
