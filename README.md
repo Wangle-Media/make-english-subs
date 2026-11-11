@@ -7,18 +7,23 @@ them: a transcript in the spoken language plus translations (English by default,
 other languages optional). **Source clips are only read, never modified**: no remuxing,
 no embedded tracks, so timecode, reel names and all other metadata stay exactly as they were.
 
-- Speech recognition: Whisper large-v3 (NVIDIA GPU via faster-whisper, Apple Silicon via MLX)
+- Speech recognition: Whisper large-v3 (NVIDIA GPU via faster-whisper, Apple Silicon via MLX),
+  with an optional dialect model for Levantine Arabic (Palestinian, Lebanese, Syrian, Jordanian)
 - Translation: a local LLM through [Ollama](https://ollama.com) (optional, recommended), or
   Whisper's built-in English translation
+- Optionally follows the screenplay (PDF, Final Draft, Fountain or plain text): where an actor
+  says a scripted line, the subtitle uses the script's wording; changed and improvised lines
+  are translated as spoken and listed for review
 - Frame-accurate cues using the clip's frame rate (including 29.97/59.94 drop-frame) and
   source timecode
 - Lines the recogniser was unsure about are marked `[?]` and listed in a review file
 
 ## Install (editors)
 
-You need about 15 GB of free disk space, an internet connection for the first setup, and
-either a Windows PC with an NVIDIA graphics card or a Mac with Apple Silicon (M1 or later).
-Other machines work too, just much slower.
+You need about 20 GB of free disk space (26 GB with the Arabic dialect model), an internet
+connection for the first setup, and either a Windows PC with an NVIDIA graphics card or a Mac
+with Apple Silicon (M1 or later) and at least 16 GB of memory. Other machines work too, just
+much slower.
 
 **Windows**: open PowerShell and paste:
 
@@ -32,10 +37,18 @@ powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/Wan
 curl -fsSL https://raw.githubusercontent.com/Wangle-Media/make-english-subs/main/install/install-mac.sh | bash
 ```
 
-The installer asks whether to add the **high-quality translator** (Ollama plus an about 8 GB
-model). Say yes unless disk space is tight: it gives clearly better English, and it is required
-for Danish and other target languages. You can run the installer again at any time to update
-or to add the translator later.
+The installer asks two questions:
+
+1. Whether to add the **high-quality translator** (Ollama plus about 9 GB of models). Say yes
+   unless disk space is tight: it gives clearly better English, and it is required for Danish
+   and other target languages and for following a script.
+2. Whether to download the **Levantine Arabic dialect model** (about 6 GB). Say yes if the
+   clips are in Palestinian, Lebanese, Syrian or Jordanian Arabic: it hears the dialect much
+   better (see [Arabic speech](#2-settings)). The window then uses it for Arabic by default.
+   On a Mac it runs on the processor instead of the graphics chip, which adds a few minutes
+   per clip.
+
+You can run the installer again at any time to update, or to add what you skipped.
 
 The installer also runs a short test of the speech recognition. If it says
 **WARNING: no usable NVIDIA GPU** on a PC that has an NVIDIA card, update the graphics driver
@@ -54,10 +67,11 @@ When it finishes you have a **MakeSubs** shortcut on the desktop (Windows) or in
 uv tool uninstall makesubs
 ```
 
-Then delete the shortcut, and to free the disk space used by the speech model, the folder
+Then delete the shortcut, and to free the disk space used by the speech models, the folder
 `.cache\huggingface` in your user folder (Windows; also `C:\ProgramData\MakeSubs` if it
-exists) or `~/.cache/huggingface` (Mac). Remove **Ollama** like any other app if you
-installed the translator and don't need it for anything else.
+exists) or `~/.cache/huggingface` (Mac). If you installed the translator: remove its models
+with `ollama rm gemma3:12b mxbai-embed-large`, and remove **Ollama** like any other app if you
+don't need it for anything else.
 
 ## Using it
 
@@ -90,7 +104,9 @@ Palestinian Arabic scene it got "You've been sleeping a lot" and "The olive tree
 again" where the standard model heard "You're sleeping on it" and "Zatoun returned to Zahar".
 It can't write English or translate, so the standard model still detects the languages,
 writes the English, and makes the rough English draft; the dialect model then transcribes
-only the Arabic, in a second pass. The first run with it downloads about 6 GB.
+only the Arabic, in a second pass. The first run with it downloads about 6 GB, unless the
+installer already did; then it is chosen by default. On a Mac it runs on the processor (the
+standard model uses the graphics chip), which adds a few minutes per clip.
 
 **Subtitles in**: tick English, Danish or any other language, the same way.
 
@@ -117,12 +133,15 @@ improvised are translated as spoken, and listed in `review.txt` next to the scri
 
 Right after you choose it, the window shows what was read: the number of scenes and lines of
 dialogue, and the characters. If the names look wrong (merged words, names that aren't
-characters), the PDF was misread; tell us, and try the `.fdx` if there is one.
+characters), the PDF was misread; tell us, and try the `.fdx` if there is one. The first run
+with a script downloads a small extra model (0.7 GB) that matches the subtitles to the script.
 
 **Scene**: leave it on *Find the scene for each clip automatically* and MakeSubs finds the
 scene itself. If all the clips you're adding are from one scene (or a few), click it and tick
 the scene(s): the list shows every scene with its heading and characters, can be searched
 (number, place or character), and shows a scene's first lines when you hover over it.
+
+![Picking the scene](docs/scene-picker.png)
 
 **Save to**: *Next to each clip* by default. Click **Choose…** to put all subtitle files in one
 folder instead, and **Next to clips** to go back.
@@ -137,13 +156,15 @@ MakeSubs remembers these settings for next time.
 Click **Make subtitles**. The box underneath shows what's happening. The first run downloads
 the models (several GB) and takes longer; after that, expect roughly a minute per few minutes
 of footage on a recent NVIDIA card or M-series Mac, plus about 30–90 s per clip and language
-for high-quality translation. Wait for it to finish before closing the window.
+for high-quality translation, and a little more with a script or the dialect model. Wait for
+it to finish before closing the window.
 
 When it's done, the box ends with a summary per clip:
 
 ```
 OK      A001C003.mov: 4 subtitle files in D:\Dailies\Day01
         1 line marked [?] to check, see A001C003.review.txt
+        script scene 2: 7 as scripted, 3 changed, 4 not in the script; see A001C003.review.txt
 OK      B002C011.mxf: 4 subtitle files in D:\Dailies\Day01
 
 All done. Click 'Show subtitle files' to open the folder.
@@ -160,6 +181,8 @@ Click **Show subtitle files** to open that folder. Then import the files into yo
 | `SKIP …: no audio` | The file has no sound (or isn't a video). Use a version of the clip with audio. |
 | `… needs the high-quality translator (Ollama)` (orange, under *Subtitles in*) | Start the Ollama app and click **Check again**, or untick the non-English languages. |
 | `FAILED …` | Something went wrong with that clip; the reason is on the same line. The other clips still finish. |
+| *Can't use this script: …* (red, under *Script*) | The file isn't there any more, or isn't a screenplay MakeSubs can read (a scanned PDF, for example). Try the `.fdx` or another export. |
+| `no script scene found with confidence` | The clip is short, mostly improvised, or the audio is poor. Pick the scene under **Scene** to use the script anyway. |
 | A box saying *MakeSubs: unexpected error* | Send the file it names (`makesubs.log`) to whoever set up MakeSubs for you. |
 
 The log file is in `%LOCALAPPDATA%\Wangle Media\MakeSubs` (Windows) or
@@ -180,15 +203,19 @@ Existing subtitle files are never replaced unless you tick *Replace existing sub
 
 ### Following the script
 
-The script is read for its dialogue, scene by scene. For each clip, in two steps:
+The script is read for its dialogue, scene by scene. For each clip, in three steps:
 
 1. Every line is translated from what was said, without the script, so the script can't pull
    the translation towards what the actor was supposed to say. MakeSubs then compares the
    English translation with the script and picks the scene with the most key words in common
    (names, places, unusual words).
-2. The translations are compared with that scene's script: for every line the translator
-   decides whether the actor said it **as scripted**, **changed** it, or said something **not
-   in the script**.
+2. Each subtitle is paired with the script line it most likely is, by meaning (a small
+   sentence-embedding model, `mxbai-embed-large`, through Ollama) and shared words, keeping
+   the script's order. Actors reword a lot, so meaning finds far more than words alone:
+   "It's out of season" is "...out of sync with the seasons". Subtitles that match nothing,
+   like crew talk, stay unpaired.
+3. The translator checks every pair and decides whether the actor said the line **as
+   scripted**, **changed** it, or said something **not in the script**.
 
 - As scripted: the subtitle uses the script's wording, only the part of the script line said in
   that subtitle. This only happens when the translation and the script line share most of
@@ -196,8 +223,13 @@ The script is read for its dialogue, scene by scene. For each clip, in two steps
 - Changed or not in the script: translated as actually said. The subtitle shows what is in
   the take, never script text that wasn't spoken.
 
+On two takes of a Palestinian Arabic scene that the actors reworded a lot, this found 26 of
+39 and 29 of 37 scripted lines, without a single wrong pairing; most of the rest were lines
+the speech recognition misheard.
+
 When the script is in another language than the subtitles, it is used for deciding only; the
-subtitles stay as translated.
+subtitles stay as translated. Without the embedding model (Ollama couldn't download it, say),
+the pairing falls back to shared words, which finds fewer lines.
 
 `review.txt` ends with what happened:
 
@@ -412,10 +444,12 @@ all clips succeeded and 1 if any failed, so it can be used in scripts.
 
 ## Known limitations
 
-- **Dialect and scratch audio**: tested on Levantine Arabic (Palestinian, Syrian, Lebanese)
-  samples. Clean speech is transcribed well, including dialect. Heavily noisy or distant audio
-  can produce invented text; that is what the `[?]` marks are for. Validate on real camera-test
-  footage before principal photography.
+- **Dialect and scratch audio**: tested on Levantine Arabic (Palestinian, Syrian, Lebanese),
+  including real Palestinian Arabic dailies. Clean speech is transcribed well; the dialect
+  model helps a lot with Levantine Arabic, but dialect words still trip up the translation
+  now and then (an untranslated "Al-Khareef" for autumn, say). Heavily noisy or distant audio
+  can produce invented text; that is what the `[?]` marks are for. Validate on real
+  camera-test footage before principal photography.
 - **Language switches inside a sentence**: language is detected per stretch of speech (up to
   about 15 s), so a short phrase in a second language right next to the first may be written
   in the wrong language.
@@ -423,11 +457,11 @@ all clips succeeded and 1 if any failed, so it can be used in scripts.
   standard screenplay formatting from Final Draft, WriterDuet, Word and the like, but not for
   scanned pages or side-by-side (dual) dialogue (the `.fdx` handles those). Plain text is read
   as Fountain (a character name in capitals with the speech right under it) or, if it keeps
-  the page layout, like a PDF. Finding the scene
-  uses the English translation, so it works best when the script is in English and English is
-  one of the subtitle languages; otherwise, pick the scene. The translator decides what counts as "as
-  scripted" and leans towards "changed" when unsure, so check `review.txt` on important
-  scenes.
+  the page layout, like a PDF. Finding the scene uses the English translation, so it works
+  best when the script is in English and English is one of the subtitle languages; otherwise,
+  pick the scene. About one scripted line in four isn't recognised when the actors reword a
+  lot (it is then listed as not in the script, and keeps its translation), so check
+  `review.txt` on important scenes.
 - **Camera-original raw formats** (BRAW, R3D, ARRIRAW) aren't supported; use the transcodes.
   Avid OP-Atom MXF stores audio in separate files: point MakeSubs at the audio MXF.
 
@@ -440,6 +474,9 @@ uv run makesubs-gui
 ```
 
 Code lives in `src/makesubs/`: `probe` (metadata), `audio` (decoding), `asr` (Whisper, voice
-activity detection, language detection), `shape` (cue timing and line breaks), `translate`
-(Ollama), `script` (screenplay reading and scene matching), `writers` (SRT and SubCap),
-`pipeline`, `cli`, `gui`.
+activity detection, language detection; dialect models in `DIALECTS`), `shape` (cue timing
+and line breaks), `translate` (Ollama: translation in anchored batches, matching subtitles to
+the script by meaning), `script` (screenplay reading and scene finding), `writers` (SRT and
+SubCap), `pipeline`, `cli`, `gui`. The tests need no models or Ollama; `tests/data` has a small
+screenplay as PDF, Final Draft and Fountain. The README screenshots are made from the real
+window, offscreen, with the test screenplay.

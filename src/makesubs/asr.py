@@ -64,6 +64,16 @@ DIALECTS = {
 }
 
 
+def dialect_installed(key: str) -> bool:
+    """Whether a dialect model is already downloaded (by the installer, say)."""
+    try:
+        from huggingface_hub import try_to_load_from_cache
+        found = try_to_load_from_cache(DIALECTS[key][1], "model.bin", cache_dir=_model_dir())
+        return isinstance(found, str)
+    except Exception:  # noqa: BLE001 - only decides a default in the window
+        return False
+
+
 # ---------------------------------------------------------------- engines
 
 class Engine:

@@ -80,3 +80,13 @@ def test_dialect_needs_its_language():
         pipeline.validate(Options(spoken=["da"], translator="whisper", dialect="levantine"))
     with pytest.raises(RuntimeError, match="Unknown dialect model"):
         pipeline.validate(Options(spoken=["ar"], translator="whisper", dialect="egyptian"))
+
+
+def test_dialect_installed(monkeypatch):
+    import huggingface_hub
+    monkeypatch.setattr(huggingface_hub, "try_to_load_from_cache",
+                        lambda repo, name, cache_dir=None: f"/cache/{repo}/{name}")
+    assert asr.dialect_installed("levantine")
+    monkeypatch.setattr(huggingface_hub, "try_to_load_from_cache",
+                        lambda repo, name, cache_dir=None: None)
+    assert not asr.dialect_installed("levantine")

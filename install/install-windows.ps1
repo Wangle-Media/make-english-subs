@@ -7,7 +7,6 @@ $ErrorActionPreference = "Stop"
 $Ref = if ($env:MAKESUBS_REF) { $env:MAKESUBS_REF } else { "main" }
 $Source = "https://github.com/Wangle-Media/make-english-subs/archive/refs/heads/$Ref.zip"
 $Bin = Join-Path $env:USERPROFILE ".local\bin"
-$LlmModel = "gemma3:12b"
 $MinDriver = [version]"527.41"  # oldest Windows driver for CUDA 12
 
 function Step($msg) { Write-Host "`n== $msg" -ForegroundColor Cyan }
@@ -50,8 +49,8 @@ uv tool install --force --reinstall-package makesubs --python 3.12 "makesubs @ $
 Check "Installing MakeSubs"
 uv tool update-shell | Out-Null
 
-Step "Optional: high-quality translation (Ollama + about 8 GB model)"
-Write-Host "Gives much better English, and enables Danish and other languages."
+Step "Optional: high-quality translation (Ollama + about 9 GB of models)"
+Write-Host "Gives much better English, enables Danish and other languages, and is needed to follow a script."
 $answer = Read-Host "Install it? [Y/n]"
 if ($answer -notmatch '^[nN]') {
     $ollama = (Get-Command ollama -ErrorAction SilentlyContinue).Source
@@ -69,17 +68,21 @@ if ($answer -notmatch '^[nN]') {
         try { Invoke-WebRequest "http://127.0.0.1:11434/api/tags" -UseBasicParsing | Out-Null; $up = $true }
         catch { if ($i -eq 0) { Start-Process $ollama -ArgumentList "serve" -WindowStyle Hidden }; Start-Sleep 2 }
     }
-    if ($up) {
-        & $ollama pull $LlmModel
-        Check "Downloading the translation model"
-    } else {
+    if (-not $up) {
         Warn "Ollama didn't start. Restart the PC, open Ollama from the Start menu, and run this installer again."
     }
+    # 'makesubs --setup' below downloads the models through Ollama.
 }
 
-Step "Downloading and testing the speech model (about 3 GB, once)"
-& (Join-Path $Bin "makesubs.exe") --setup
-Check "Speech model setup"
+Step "Optional: Levantine Arabic dialect model (about 6 GB)"
+Write-Host "Hears Palestinian, Lebanese, Syrian and Jordanian Arabic much better than the standard model."
+$answer = Read-Host "Download it? [y/N]"
+$dialect = @()
+if ($answer -match '^[yY]') { $dialect = @("--dialect", "levantine") }
+
+Step "Downloading and testing the models (several GB, once)"
+& (Join-Path $Bin "makesubs.exe") --setup @dialect
+Check "Model setup"
 
 Step "Creating desktop shortcut"
 $shell = New-Object -ComObject WScript.Shell

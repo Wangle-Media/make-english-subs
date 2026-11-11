@@ -8,9 +8,14 @@ set -euo pipefail
 REF="${MAKESUBS_REF:-main}"
 SOURCE="https://github.com/Wangle-Media/make-english-subs/archive/refs/heads/$REF.zip"
 BIN="$HOME/.local/bin"
-LLM_MODEL="gemma3:12b"
 
 step() { printf '\n\033[36m== %s\033[0m\n' "$1"; }
+# ask "question" Y|N: true for yes; Enter gives the default
+ask() {
+    local answer=""
+    read -r -p "$1 " answer < /dev/tty || answer=""
+    if [ -z "$answer" ]; then [ "$2" = "Y" ]; else [[ "$answer" =~ ^[yY] ]]; fi
+}
 
 if [ "$(uname -m)" != "arm64" ]; then
     echo "This Mac has an Intel CPU. MakeSubs will work, but slowly (no Apple Silicon acceleration)."
@@ -28,10 +33,10 @@ step "Installing MakeSubs ($REF)"
 uv tool install --force --reinstall-package makesubs --python 3.12 "makesubs @ $SOURCE"
 uv tool update-shell >/dev/null || true
 
-step "Optional: high-quality translation (Ollama + about 8 GB model)"
-echo "Gives much better English, and enables Danish and other languages."
-read -r -p "Install it? [Y/n] " answer < /dev/tty || answer=""
-if [[ ! "$answer" =~ ^[nN] ]]; then
+step "Optional: high-quality translation (Ollama + about 9 GB of models)"
+echo "Gives much better English, enables Danish and other languages, and is needed to follow"
+echo "a script."
+if ask "Install it? [Y/n]" Y; then
     if [ ! -d /Applications/Ollama.app ]; then
         echo "Downloading Ollama..."
         tmp="$(mktemp -d)"
@@ -40,15 +45,27 @@ if [[ ! "$answer" =~ ^[nN] ]]; then
         rm -rf "$tmp"
     fi
     open -a Ollama
+    up=""
     for _ in $(seq 30); do
-        curl -fs http://127.0.0.1:11434/api/tags >/dev/null && break
+        if curl -fs http://127.0.0.1:11434/api/tags >/dev/null; then up=1; break; fi
         sleep 2
     done
-    /Applications/Ollama.app/Contents/Resources/ollama pull "$LLM_MODEL"
+    if [ -z "$up" ]; then
+        echo "Ollama didn't start. Open Ollama from Applications, then run this installer again."
+    fi
+    # 'makesubs --setup' below downloads the models through Ollama.
 fi
 
-step "Downloading and testing the speech model (about 3 GB, once)"
-"$BIN/makesubs" --setup
+step "Optional: Levantine Arabic dialect model (about 6 GB)"
+echo "Hears Palestinian, Lebanese, Syrian and Jordanian Arabic much better than the standard"
+echo "model. On a Mac it runs on the processor, which adds a few minutes per clip."
+DIALECT=()
+if ask "Download it? [y/N]" N; then
+    DIALECT=(--dialect levantine)
+fi
+
+step "Downloading and testing the models (several GB, once)"
+"$BIN/makesubs" --setup ${DIALECT[@]+"${DIALECT[@]}"}
 
 step "Creating MakeSubs app"
 mkdir -p "$HOME/Applications"
