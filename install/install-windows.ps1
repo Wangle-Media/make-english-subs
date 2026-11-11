@@ -74,11 +74,15 @@ if ($answer -notmatch '^[nN]') {
     # 'makesubs --setup' below downloads the models through Ollama.
 }
 
-Step "Optional: Levantine Arabic dialect model (about 6 GB)"
-Write-Host "Hears Palestinian, Lebanese, Syrian and Jordanian Arabic much better than the standard model."
-$answer = Read-Host "Download it? [y/N]"
 $dialect = @()
-if ($answer -match '^[yY]') { $dialect = @("--dialect", "levantine") }
+# Older versions (MAKESUBS_REF=release-...) don't have dialect models.
+$help = (& (Join-Path $Bin "makesubs.exe") --help | Out-String)
+if ($help -match '--dialect') {
+    Step "Optional: Levantine Arabic dialect model (about 6 GB)"
+    Write-Host "Hears Palestinian, Lebanese, Syrian and Jordanian Arabic much better than the standard model."
+    $answer = Read-Host "Download it? [y/N]"
+    if ($answer -match '^[yY]') { $dialect = @("--dialect", "levantine") }
+}
 
 Step "Downloading and testing the models (several GB, once)"
 & (Join-Path $Bin "makesubs.exe") --setup @dialect
