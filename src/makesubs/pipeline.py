@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import asr, languages, translate
+from . import asr, languages, project, translate
 from . import script as screenplay
 from .audio import load_audio
 from .probe import MediaInfo, probe
@@ -53,6 +53,8 @@ class Job:
     script_guess: screenplay.Match | None = None   # best scene, even if not good enough
     script_cues: list[Cue] = field(default_factory=list)  # translated cues with match info
     script_lines: list[tuple[str, screenplay.Line]] = field(default_factory=list)
+    tracks: dict[str, list[Cue]] = field(default_factory=dict)  # speech-timed, per output tag
+    review_file: Path | None = None
 
 
 def resolve_translator(opts: Options) -> str:
@@ -227,6 +229,23 @@ def _script_review(job: Job, opts: Options) -> list[str]:
     return out
 
 
+def _write_project(job: Job, opts: Options) -> None:
+    """The review file the review window opens (see project.py)."""
+    info = job.info
+    script = {ref: f"{ln.character.title()}: {ln.text}" for ref, ln in job.script_lines}
+    proj = project.Project(
+        clip=info.path, out_dir=opts.out_dir or info.path.parent, fps=info.fps,
+        start_tc=info.start_tc, avid_start=opts.avid_start, formats=list(opts.formats),
+        mark_flagged=opts.mark_flagged, channel=str(opts.channel),
+        script_name=Path(opts.script).name if opts.script else "",
+        scene=job.script_match.label if job.script_match else "",
+        tracks=[project.Track(tag, "" if tag == "transcript" else tag,
+                              project.lines_from(cues, script))
+                for tag, cues in job.tracks.items()])
+    job.review_file = proj.save()
+    job.outputs.append(job.review_file)
+
+
 def run(files: list[Path], opts: Options, progress: Progress = print) -> list[Job]:
     translator = validate(opts)
     script = load_script(opts)
@@ -303,6 +322,7 @@ def run(files: list[Path], opts: Options, progress: Progress = print) -> list[Jo
         for c in cues:
             c.flagged = c.confidence < opts.flag_threshold
         job.speech_cues = cues
+        job.tracks["transcript"] = cues
         job.source_cues = finalize(cues, job.info.fps)
         _write(job, opts, "transcript", job.source_cues)
 
@@ -356,13 +376,14 @@ def run(files: list[Path], opts: Options, progress: Progress = print) -> list[Jo
                     progress("  no script scene matched with confidence; translated without it")
             for target in opts.targets:
                 if translator == "llm":
-                    cues = finalize(translated[target], job.info.fps)
+                    cues = translated[target]
                 else:  # Whisper's own English translation, with its own timing
                     cues = build_cues(draft_segs)
                     _flag_overlapping(cues, job.source_cues, opts.flag_threshold)
-                    cues = finalize(cues, job.info.fps)
-                _write(job, opts, target, cues)
+                job.tracks[target] = cues
+                _write(job, opts, target, finalize(cues, job.info.fps))
             _write_review(job, opts, translator)
+            _write_project(job, opts)
             progress(f"Finished {job.info.path.name}")
         except Exception as e:  # noqa: BLE001
             job.error = str(e)

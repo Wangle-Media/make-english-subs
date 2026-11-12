@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from . import __version__, languages, translate
+from . import __version__, languages, project, translate
 from .asr import DIALECTS, dialect_installed
 from . import script as screenplay
 from .pipeline import Options, run
@@ -231,6 +231,7 @@ class ScriptLoader(QObject):
 
 class DropList(QListWidget):
     script_dropped = Signal(str)
+    review_dropped = Signal(list)
 
     def __init__(self):
         super().__init__()
@@ -249,7 +250,10 @@ class DropList(QListWidget):
         for p in paths:  # a dropped screenplay is the script, not a clip
             if p.is_file() and p.suffix.lower() in (".fdx", ".pdf", ".fountain"):
                 self.script_dropped.emit(str(p))
-        self.add_paths(paths)
+        reviews = [p for p in paths if p.name.endswith(project.SUFFIX)]
+        if reviews:  # finished subtitles to check: open them for review
+            self.review_dropped.emit(reviews)
+        self.add_paths(p for p in paths if p not in reviews)
 
     def add_paths(self, paths):
         have = set(self.paths())
@@ -258,7 +262,7 @@ class DropList(QListWidget):
             for f in files:
                 if str(f) not in have and not f.name.startswith(".") \
                         and f.suffix.lower() not in (".srt", ".txt", ".xml", ".ale", ".fdx", ".pdf",
-                                                     ".fountain"):
+                                                     ".fountain", ".json", ".part"):
                     item = QListWidgetItem(f"{f.name}    —  {f.parent}")
                     item.setData(Qt.UserRole, str(f))
                     item.setToolTip(str(f))
@@ -273,6 +277,7 @@ class Worker(QObject):
     log = Signal(str)
     finished = Signal(bool)
     folder = Signal(str)  # where the subtitle files ended up
+    reviews = Signal(list, int)  # review files, lines worth a look
 
     def __init__(self, files, opts):
         super().__init__()
@@ -282,27 +287,34 @@ class Worker(QObject):
         try:
             jobs = run([Path(f) for f in self.files], self.opts, self.log.emit)
             self.log.emit("")
+            reviews, to_check = [], 0
             for j in jobs:
                 if j.error:
                     self.log.emit(f"FAILED  {j.info.path.name}: {j.error}")
                     continue
-                subs = [p for p in j.outputs if not p.name.endswith(".review.txt")]
+                subs = [p for p in j.outputs if p.suffix in (".srt", ".txt")
+                        and not p.name.endswith(".review.txt")]
                 where = subs[0].parent if subs else j.info.path.parent
                 self.log.emit(f"OK      {j.info.path.name}: {len(subs)} subtitle files in {where}")
-                flagged = sum(c.flagged for c in j.source_cues)
-                if flagged:
-                    self.log.emit(f"        {flagged} line{'s' if flagged > 1 else ''} marked [?] "
-                                  f"to check, see {j.info.path.stem}.review.txt")
+                n = 0
+                if j.review_file:
+                    reviews.append(j.review_file)
+                    proj = project.load(j.review_file)
+                    n = sum(proj.issue(t, i) in project.MUST for t in proj.targets
+                            for i in range(len(t.lines)))
+                    to_check += n
+                if n:
+                    self.log.emit(f"        {n} line{'s' if n > 1 else ''} to check")
                 if j.script_match:
                     n = {k: sum(c.script_match == k for c in j.script_cues)
                          for k in ("same", "changed", "none")}
                     self.log.emit(f"        script {j.script_match.label}: {n['same']} as scripted, "
-                                  f"{n['changed']} changed, {n['none']} not in the script; "
-                                  f"see {j.info.path.stem}.review.txt")
+                                  f"{n['changed']} changed, {n['none']} not in the script")
                 elif self.opts.script:
                     self.log.emit("        no script scene found with confidence; pick the scene "
                                   "under Script to use it")
                 self.folder.emit(str(Path(where).resolve()))
+            self.reviews.emit(reviews, to_check)
             self.finished.emit(bool(jobs) and not any(j.error for j in jobs))
         except Exception as e:  # noqa: BLE001 - show anything to the editor
             self.log.emit(f"Error: {e}")
@@ -323,6 +335,7 @@ class Window(QMainWindow):
         lay.addWidget(QLabel("<b>1. Drop clips (or folders) here</b> — they are only read, never changed."))
         self.files = DropList()
         self.files.script_dropped.connect(self.set_script)
+        self.files.review_dropped.connect(self.open_review)
         lay.addWidget(self.files)
         row = QHBoxLayout()
         add, clear = QPushButton("Add files…"), QPushButton("Clear list")
@@ -437,7 +450,16 @@ class Window(QMainWindow):
         self.show_files.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(self.result_dir)))
         self.result_dir = ""
+        self.review_btn = QPushButton("4. Review and fix")
+        self.review_btn.setMinimumHeight(36)
+        self.review_btn.setToolTip("Watch the subtitles over the clip, fix wrong lines and save "
+                                   "the files again. Opens the clips just done, or choose "
+                                   "earlier ones (their .makesubs.json file).")
+        self.review_btn.clicked.connect(self.review_clicked)
+        self.review_files: list[Path] = []
+        self.review_windows = []
         row.addWidget(self.go, 3)
+        row.addWidget(self.review_btn, 2)
         row.addWidget(self.show_files, 1)
         lay.addLayout(row)
 
@@ -522,8 +544,9 @@ class Window(QMainWindow):
         elif script:
             self.script_hint.setText("Where an actor says a scripted line, the subtitle follows "
                                      "the script's wording. Changed and improvised lines are "
-                                     "translated as spoken and listed in review.txt. The first "
-                                     "run with a script downloads a small model (0.7 GB).")
+                                     "translated as spoken, and shown next to the script line "
+                                     "in Review and fix. The first run with a script downloads "
+                                     "a small model (0.7 GB).")
             self.script_hint.setStyleSheet("color: gray")
         if hasattr(self, "script_hint"):
             self.script_hint.setVisible(bool(script))
@@ -626,6 +649,7 @@ class Window(QMainWindow):
                        dialect=self.dialect.currentData() if "ar" in self.spoken.codes() else None)
         self.log.clear()
         self.result_dir = ""
+        self.set_reviews([], 0)
         self.show_files.setEnabled(False)
         self.go.setEnabled(False)
         self.go.setText("Working… (first run downloads models)")
@@ -635,6 +659,7 @@ class Window(QMainWindow):
         self.thread.started.connect(self.worker.run)
         self.worker.log.connect(self.say)
         self.worker.folder.connect(self.set_result_dir)
+        self.worker.reviews.connect(self.set_reviews)
         self.worker.finished.connect(self.done)
         self.worker.finished.connect(self.thread.quit)
         self.thread.start()
@@ -644,11 +669,41 @@ class Window(QMainWindow):
             self.result_dir = d
             self.show_files.setEnabled(True)
 
+    def set_reviews(self, files: list, to_check: int):
+        self.review_files = [Path(f) for f in files]
+        self.review_btn.setText(f"4. Review and fix ({to_check} to check)" if files and to_check
+                                else "4. Review and fix")
+        self.review_btn.setObjectName("primary" if files and to_check else "")
+        self.review_btn.setStyleSheet(
+            "QPushButton#primary { background: palette(highlight); color: white; "
+            "border-radius: 5px; font-weight: 600; padding: 4px 12px; }")
+
+    def review_clicked(self):
+        from .review import open_files
+        files = self.review_files or open_files(self)
+        if files:
+            self.open_review(files)
+
+    def open_review(self, files):
+        from .review import ReviewWindow
+        win = ReviewWindow([Path(f) for f in files])
+        if not win.projects:
+            win.deleteLater()
+            return
+        self.review_windows.append(win)
+        win.closed.connect(lambda: self.review_windows.remove(win))
+        win.show()
+        win.raise_()
+
     def done(self, ok: bool):
         self.go.setEnabled(True)
         self.go.setText("3. Make subtitles")
-        self.say("\nAll done. Click 'Show subtitle files' to open the folder." if ok
-                 else "\nFinished with problems, see above.")
+        if ok and self.review_files:
+            self.say("\nAll done. Click 'Review and fix' to watch the subtitles over the clip "
+                     "and correct them, or 'Show subtitle files' to open the folder.")
+        else:
+            self.say("\nAll done. Click 'Show subtitle files' to open the folder." if ok
+                     else "\nFinished with problems, see above.")
 
     def say(self, text: str):
         self.log.appendPlainText(text)
@@ -661,6 +716,10 @@ class Window(QMainWindow):
             self.say("Still working — please wait for it to finish.")
             e.ignore()
             return
+        for win in list(self.review_windows):
+            if not win.close():  # unsaved changes and the editor chose Cancel
+                e.ignore()
+                return
         self.save_settings()
         e.accept()
 
