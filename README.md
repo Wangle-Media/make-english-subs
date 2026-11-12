@@ -17,6 +17,8 @@ no embedded tracks, so timecode, reel names and all other metadata stay exactly 
 - Frame-accurate cues using the clip's frame rate (including 29.97/59.94 drop-frame) and
   source timecode
 - Lines the recogniser was unsure about are marked `[?]` and listed in a review file
+- A review window to check the subtitles over the clip, fix lines, retime them and save the
+  files again, with the lines that need a look listed first
 
 ## Install (editors)
 
@@ -117,7 +119,7 @@ don't need it for anything else.
 ## Using it
 
 Open **MakeSubs** from the desktop shortcut (Windows) or `~/Applications` (Mac). The window
-has three numbered steps, from top to bottom.
+has four numbered steps, from top to bottom.
 
 ![The MakeSubs window after a finished run](docs/window.png)
 
@@ -168,8 +170,8 @@ better (e.g. a boom on channel 1), pick it.
 screenplay (a PDF, a Final Draft `.fdx`, a Fountain `.fountain`, or a plain-text export), or
 drop it on the clip list. Where an actor
 says a scripted line, the subtitle then uses the script's wording; lines the actor changed or
-improvised are translated as spoken, and listed in `review.txt` next to the script line. See
-[Following the script](#following-the-script). **None** switches it off.
+improvised are translated as spoken, and shown next to the script line in
+[Review and fix](#4-review-and-fix). See [Following the script](#following-the-script). **None** switches it off.
 
 Right after you choose it, the window shows what was read: the number of scenes and lines of
 dialogue, and the characters. If the names look wrong (merged words, names that aren't
@@ -203,15 +205,86 @@ When it's done, the box ends with a summary per clip:
 
 ```
 OK      A001C003.mov: 4 subtitle files in D:\Dailies\Day01
-        1 line marked [?] to check, see A001C003.review.txt
-        script scene 2: 7 as scripted, 3 changed, 4 not in the script; see A001C003.review.txt
+        2 lines to check
+        script scene 2: 7 as scripted, 3 changed, 4 not in the script
 OK      B002C011.mxf: 4 subtitle files in D:\Dailies\Day01
 
-All done. Click 'Show subtitle files' to open the folder.
+All done. Click 'Review and fix' to watch the subtitles over the clip and correct them, or
+'Show subtitle files' to open the folder.
 ```
 
-Click **Show subtitle files** to open that folder. Then import the files into your NLE (see
-[Importing into the NLE](#importing-into-the-nle)), and have the lines marked `[?]` checked.
+Click **Review and fix** to check the lines (next section), or **Show subtitle files** to open
+the folder. Then import the files into your NLE (see
+[Importing into the NLE](#importing-into-the-nle)).
+
+### 4. Review and fix
+
+**Review and fix** opens the clips you just did in a review window: the clip with the
+subtitle over the picture, a timeline under it, and the subtitle lines on the right. The lines
+that need a look come first; fix what's wrong, and **Save subtitles** writes the subtitle files
+again.
+
+![The review window](docs/review.png)
+
+To review clips done earlier, click **Review and fix** before making new subtitles and choose
+the clips' `.makesubs.json` files, or drop those files on the clip list. (Clips done with
+MakeSubs 0.4 or earlier have no such file: make their subtitles again to review them here.)
+
+**The lines to check.** *To check* lists the lines that need a look:
+
+| Mark | Why |
+|---|---|
+| **Unsure** (yellow) | The speech recognition wasn't sure: noise, overlap, off-mic. The subtitle may read well and still be wrong. |
+| **Not translated** (red) | The translator left the line as it was spoken. |
+
+**Differs from script** (blue) lists, separately, the lines the actor said differently from the
+script (only when a script was used). They were translated as spoken, which is usually what you
+want, so going through them is optional. Each one shows the script line under the subtitle. If
+the actor did say the scripted line, **Use script wording** puts it in; only the part of the
+script line that belongs to this subtitle is used, in bold.
+
+**Going through them.** The first line to check is selected and plays. For each line:
+
+1. Listen, and compare what was heard (the original language, shown above the subtitle) with
+   the subtitle.
+2. If it's wrong, type the fix in the subtitle box. The picture shows the change right away.
+   The box warns when a line is longer than 42 characters or too fast to read.
+3. Press **Looks good, next** (Ctrl+Enter, ⌘↩ on a Mac). The line is marked checked and the next
+   one plays. The progress at the top counts down; when the list is empty, you're done.
+
+Checked and fixed lines lose their `[?]` in the files. **Undo my changes to this line** puts
+the machine's version back.
+
+**Timing.** The selected line has handles in the timeline: drag its ends to change when it
+shows. Or use the ‹ › buttons under the subtitle (one frame at a time), or ◆ to set the start
+or end to the playhead. Click the timeline to move the playhead, scroll on it to zoom.
+Changing the timing of a line changes it in every language.
+
+**Keys.** These also work while you type in the subtitle box (on a Mac, Ctrl is ⌘ and Alt is
+Option). **Keys** in the window lists them too.
+
+| Key | Does |
+|---|---|
+| Esc (or Space when not typing) | Play / pause |
+| Ctrl+R | Play the line again |
+| Ctrl+Enter | Looks good: next line to check |
+| Ctrl+↓ / Ctrl+↑ | Next / previous line to check |
+| Alt+↓ / Alt+↑ | Next / previous line |
+| Ctrl+U | Use the script's wording |
+| Alt+← / Alt+→ | Start one frame earlier / later |
+| Alt+Shift+← / Alt+Shift+→ | End one frame earlier / later |
+| Ctrl+I / Ctrl+O | Start / end at the playhead |
+| Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
+| Ctrl+S | Save the subtitle files |
+| Ctrl+F | Find text, in the subtitles and in what was heard |
+
+**Saving.** **Save subtitles** writes every subtitle file for the clip again (all languages,
+`.srt` and Avid), and saves your review in the clip's `.makesubs.json`, so you can carry on
+later. Nothing is written until you save; closing the window with unsaved changes asks first.
+Import the saved files into the NLE again to pick up the fixes.
+
+If the clip has moved since the subtitles were made, the window says so: click **Find the
+clip…**, or just edit without picture and sound.
 
 ### If something goes wrong
 
@@ -238,6 +311,7 @@ For `A001C003.mov`, next to the clip (or in the folder you chose):
 | `A001C003.en.srt`, `A001C003.da.srt`, ... | Translations |
 | `*.avid.txt` | The same, as Avid SubCap files (if selected) |
 | `A001C003.review.txt` | Languages detected, and every line that needs checking, with source timecode; with a script, also the lines that differ from it |
+| `A001C003.makesubs.json` | Everything [Review and fix](#4-review-and-fix) needs to show, edit and save the subtitles again |
 
 Existing subtitle files are never replaced unless you tick *Replace existing subtitle files*.
 
@@ -312,7 +386,8 @@ one. (The window shows the same when you choose the script.)
 Machine transcription of scratch audio makes mistakes, and the dangerous ones **read
 fluently**. When the recogniser's confidence is low (noise, off-mic, overlapping dialogue),
 the line is marked `[?]` in every language and listed in `review.txt`. Have an Arabic speaker
-check those lines before anything goes to a client or into a cut that depends on them.
+check those lines in [Review and fix](#4-review-and-fix) before anything goes to a client or
+into a cut that depends on them.
 
 ### Importing into the NLE
 
@@ -398,7 +473,7 @@ B002C011.mxf: 54.0s, 29.970 DF, TC 09:59:58;00, a0:1ch, a1:1ch
 B002C011.transcript.srt        B002C011.transcript.avid.txt
 B002C011.en.srt                B002C011.en.avid.txt
 B002C011.da.srt                B002C011.da.avid.txt
-B002C011.review.txt
+B002C011.review.txt            B002C011.makesubs.json
 ```
 
 `B002C011.transcript.srt` contains what was said, in the spoken language. Times start at the
@@ -517,6 +592,9 @@ Code lives in `src/makesubs/`: `probe` (metadata), `audio` (decoding), `asr` (Wh
 activity detection, language detection; dialect models in `DIALECTS`), `shape` (cue timing
 and line breaks), `translate` (Ollama: translation in anchored batches, matching subtitles to
 the script by meaning), `script` (screenplay reading and scene finding), `writers` (SRT and
-SubCap), `pipeline`, `cli`, `gui`. The tests need no models or Ollama; `tests/data` has a small
-screenplay as PDF, Final Draft and Fountain. The README screenshots are made from the real
-window, offscreen, with the test screenplay.
+SubCap), `pipeline`, `cli`, `gui`, `project` (the `.makesubs.json` review file: on-screen
+timing worked out as the pipeline does it, with hand-set timing on top) and `review` (the review
+window; playback through QtMultimedia from PySide6-Addons). The tests need no models or Ollama;
+`tests/data` has a small screenplay as PDF, Final Draft and Fountain, and the review window is
+tested offscreen. The README screenshots are made from the real windows, offscreen, with
+made-up clips and screenplays.
