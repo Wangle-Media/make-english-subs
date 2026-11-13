@@ -250,8 +250,10 @@ class DropList(QListWidget):
         for p in paths:  # a dropped screenplay is the script, not a clip
             if p.is_file() and p.suffix.lower() in (".fdx", ".pdf", ".fountain"):
                 self.script_dropped.emit(str(p))
-        reviews = [p for p in paths if p.name.endswith(project.SUFFIX)]
-        if reviews:  # finished subtitles to check: open them for review
+        reviews = [p for p in paths
+                   if p.name.endswith(project.SUFFIX) or p.suffix.lower() == ".srt"]
+        if reviews:  # finished subtitles to check, with any clips or sound dropped with them
+            reviews += [p for p in paths if p.is_file() and p.suffix.lower() in project.MEDIA]
             self.review_dropped.emit(reviews)
         self.add_paths(p for p in paths if p not in reviews)
 
@@ -454,7 +456,8 @@ class Window(QMainWindow):
         self.review_btn.setMinimumHeight(36)
         self.review_btn.setToolTip("Watch the subtitles over the clip, fix wrong lines and save "
                                    "the files again. Opens the clips just done, or choose "
-                                   "earlier ones (their .makesubs.json file).")
+                                   "others: their .makesubs.json or .srt files, and the clip "
+                                   "or its sound if it has another name.")
         self.review_btn.clicked.connect(self.review_clicked)
         self.review_files: list[Path] = []
         self.review_windows = []

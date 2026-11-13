@@ -230,8 +230,30 @@ again.
 ![The review window](docs/review.png)
 
 To review clips done earlier, click **Review and fix** before making new subtitles and choose
-the clips' `.makesubs.json` files, or drop those files on the clip list. (Clips done with
-MakeSubs 0.4 or earlier have no such file: make their subtitles again to review them here.)
+the clips' `.makesubs.json` files, or drop those files on the clip list.
+
+**Subtitles without a review file** (clips done with MakeSubs 0.4 or earlier, or subtitles from
+another tool): choose or drop the clip's `.srt` file instead. The other `.srt` files of the
+same clip next to it open with it, and the transcript shows as what was heard. Lines marked
+`[?]` are the unsure ones. The timing is kept exactly as it is, and only the files you change
+are written again. If there's an Avid file next to it, that is written again too, once the
+window knows the frame rate: open the camera clip with the subtitles, not only its sound.
+What an `.srt` doesn't carry: how sure the recognition was and the script comparison, and
+*Not translated* only finds lines left in Arabic or Hebrew script.
+
+The window finds the clip by its name, in the folder it was in or next to the subtitles. A
+sound file with the clip's name works too (`A001C003.wav` next to `A001C003.makesubs.json`).
+If it has another name, choose the subtitles and the clip or sound file together (or drop
+them together), or click **Find the clip or sound…** in the window. The subtitle files keep
+the clip's name either way.
+
+**Someone else reviewing.** Send them the clip's `.makesubs.json` (or its `.srt` files) and the
+clip, or just its sound, which is much smaller. They don't need the speech models or the
+translator: with [uv](https://docs.astral.sh/uv/getting-started/installation/) installed,
+the command under [Try a new version](#upgrading) opens MakeSubs; they click
+**Review and fix**, choose the files, check, and save. Saving writes the subtitle files and
+the `.makesubs.json`, under the clip's name, next to the subtitles: those are what they send
+back.
 
 **The lines to check.** *To check* lists the lines that need a look:
 
@@ -287,7 +309,7 @@ later. Nothing is written until you save; closing the window with unsaved change
 Import the saved files into the NLE again to pick up the fixes.
 
 If the clip has moved since the subtitles were made, the window says so: click **Find the
-clip…**, or just edit without picture and sound.
+clip or sound…**, or just edit without picture and sound.
 
 ### If something goes wrong
 
@@ -562,7 +584,7 @@ all clips succeeded and 1 if any failed, so it can be used in scripts.
 
 To check and fix the subtitles afterwards, open the MakeSubs window, click
 **Review and fix** and choose the clips' `.makesubs.json` files (see
-[Review and fix](#4-review-and-fix)).
+[Review and fix](#4-review-and-fix)). The `.srt` files work too.
 
 ## Known limitations
 

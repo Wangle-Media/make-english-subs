@@ -297,7 +297,7 @@ class VideoView(QWidget):
         self.message = ""
         self.setMinimumSize(320, 180)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.find_btn = QPushButton("Find the clip…", self)
+        self.find_btn = QPushButton("Find the clip or sound…", self)
         self.find_btn.hide()
         self.find_btn.clicked.connect(self.find_clip)
 
@@ -595,14 +595,12 @@ class ReviewWindow(QMainWindow):
     def __init__(self, files: list[Path], parent=None):
         super().__init__(parent)
         self.setAttribute(Qt.WA_DeleteOnClose)
-        self.projects: list[Project] = []
         self.stacks: dict[int, QUndoStack] = {}
         self.saved_index: dict[int, int] = {}
-        for f in files:
-            try:
-                self.projects.append(project.load(Path(f)))
-            except Exception as e:  # noqa: BLE001
-                QMessageBox.warning(self, "MakeSubs", f"Can't open {Path(f).name}:\n{e}")
+        self.projects, problems = project.open_many([Path(f) for f in files])
+        if problems:
+            QMessageBox.warning(self, "MakeSubs", "Can't open everything:\n\n"
+                                + "\n".join(problems))
         self.proj: Project | None = None
         self.track: Track | None = None
         self.source_track: Track | None = None
@@ -637,7 +635,7 @@ class ReviewWindow(QMainWindow):
         self.clip_box = QComboBox()
         self.clip_box.setMinimumWidth(260)
         for pr in self.projects:
-            self.clip_box.addItem(pr.clip.name)
+            self.clip_box.addItem(pr.title)
         self.clip_box.currentIndexChanged.connect(self.open_clip)
         title = QVBoxLayout()
         title.setSpacing(0)
@@ -951,7 +949,13 @@ class ReviewWindow(QMainWindow):
         self.player.errorOccurred.connect(
             lambda _e, msg: self.video.set_message(f"Can't play this clip: {msg}"))
         self.player.playbackStateChanged.connect(lambda _s: self._update_play_btn())
+        self.player.mediaStatusChanged.connect(self._media_status)
         self._update_play_btn()
+
+    def _media_status(self, status):
+        """A sound file has no picture: say so, rather than show an empty frame."""
+        if status == QMediaPlayer.MediaStatus.LoadedMedia and not self.player.hasVideo():
+            self.video.set_message(f"Sound only: {self.proj.clip.name}", True)
 
     # ---------------------------------------------------------------- opening
 
@@ -963,10 +967,7 @@ class ReviewWindow(QMainWindow):
             return
         self.proj = pr = self.projects[i]
         self.clip_box.setVisible(len(self.projects) > 1)
-        self.clip_title.setText(pr.clip.name)
-        bits = [pr.scene[:1].upper() + pr.scene[1:], pr.script_name,
-                f"{pr.fps} fps" if pr.fps else "", f"TC {pr.start_tc}" if pr.start_tc else ""]
-        self.clip_info.setText("   ·   ".join(b for b in bits if b))
+        self._header()
         if id(pr) not in self.stacks:
             self.stacks[id(pr)] = QUndoStack(self)
             self.stacks[id(pr)].indexChanged.connect(lambda _i: self._update_saved())
@@ -1008,6 +1009,13 @@ class ReviewWindow(QMainWindow):
         self.select(first_check if first_check is not None else 0, play=False)
         self._update_progress()
 
+    def _header(self):
+        pr = self.proj
+        self.clip_title.setText(pr.title)
+        bits = [pr.scene[:1].upper() + pr.scene[1:], pr.script_name,
+                f"{pr.fps} fps" if pr.fps else "", f"TC {pr.start_tc}" if pr.start_tc else ""]
+        self.clip_info.setText("   ·   ".join(b for b in bits if b))
+
     def _load_media(self):
         pr = self.proj
         self.video.image = None
@@ -1015,17 +1023,21 @@ class ReviewWindow(QMainWindow):
             return
         if not pr.clip.exists():
             self.player.setSource(QUrl())
-            self.video.set_message(f"The clip isn't at\n{pr.clip}\n(moved or renamed?)", True)
+            self.video.set_message(
+                "No clip or sound opened with these subtitles." if not pr.clip.suffix else
+                f"The clip isn't at\n{pr.clip}\n(moved or renamed?)", True)
             return
         self.video.set_message("")
         self.player.setSource(QUrl.fromLocalFile(str(pr.clip)))
         self.player.pause()  # shows the first frame
 
     def find_clip(self):
-        f, _ = QFileDialog.getOpenFileName(self, f"Where is {self.proj.clip.name}?",
-                                           str(self.proj.out_dir))
+        f, _ = QFileDialog.getOpenFileName(
+            self, f"The clip or its sound for {self.proj.stem}", str(self.proj.out_dir),
+            f"Clips and sound ({' '.join('*' + e for e in project.MEDIA)});;All files (*)")
         if f:
-            self.proj.clip = Path(f)
+            self.proj.attach(Path(f))   # the subtitle files keep their name
+            self._header()
             self._mark_dirty()
             self._load_media()
             self._load_wave()
@@ -1210,7 +1222,9 @@ class ReviewWindow(QMainWindow):
             rtl_lang = src.lang in project._RTL_LANGS
             lang = f" ({languages.name(src.lang)})" if src.lang and \
                 rtl_lang == is_rtl(src.text) else ""
-            sure = f"   ·   {src.confidence:.0%} sure" if src.flagged else ""
+            # (subtitles opened from an .srt don't know how sure the recognition was)
+            sure = f"   ·   {src.confidence:.0%} sure" if src.flagged and src.confidence < 1 \
+                else ""
             self.src_label.setText(f"Heard{lang}{sure}")
             self.src_text.setText(src.text)
             rtl = is_rtl(src.text)
@@ -1601,9 +1615,9 @@ class ReviewWindow(QMainWindow):
         self.save_btn.setEnabled(any_dirty)
         self.save_state.setText("Unsaved changes" if cur else "Saved" if self.proj else "")
         self.setWindowModified(any_dirty)
-        self.setWindowTitle(f"Review subtitles — {self.proj.clip.name if self.proj else ''}[*]")
+        self.setWindowTitle(f"Review subtitles — {self.proj.title if self.proj else ''}[*]")
         for k, pr in enumerate(self.projects):
-            self.clip_box.setItemText(k, ("● " if self.dirty(pr) else "") + pr.clip.name)
+            self.clip_box.setItemText(k, ("● " if self.dirty(pr) else "") + pr.title)
 
     def save(self) -> bool:
         written = []
@@ -1614,7 +1628,7 @@ class ReviewWindow(QMainWindow):
                 written += pr.export()
                 pr.save()
             except Exception as e:  # noqa: BLE001
-                QMessageBox.critical(self, "MakeSubs", f"Couldn't save {pr.clip.name}:\n{e}")
+                QMessageBox.critical(self, "MakeSubs", f"Couldn't save {pr.title}:\n{e}")
                 return False
             self.saved_index[id(pr)] = self.stacks[id(pr)].index()
             pr._dirty = False
@@ -1642,19 +1656,24 @@ class ReviewWindow(QMainWindow):
         if self.player:
             self.player.stop()
         for t in list(self.threads):
+            t.quit()   # its quit signal would wait for this (blocked) thread: ask directly
             t.wait(20000)
         self.closed.emit()
         e.accept()
 
 
 def open_files(parent=None) -> list[Path]:
+    """Review files or .srt files, and optionally the clips or sound files to play with them."""
+    media = " ".join("*" + e for e in project.MEDIA)
     files, _ = QFileDialog.getOpenFileNames(
-        parent, "Open subtitles to review", "", f"MakeSubs review files (*{project.SUFFIX})")
+        parent, "Open subtitles to review (and the clip or sound, if it has another name)", "",
+        f"Subtitles, clips and sound (*{project.SUFFIX} *.srt {media});;"
+        f"MakeSubs review files (*{project.SUFFIX});;Subtitles (*.srt);;All files (*)")
     return [Path(f) for f in files]
 
 
 def main() -> int:
-    """`makesubs-review [FILE...]`: open review files directly."""
+    """Open review files, .srt files and their clips directly."""
     app = QApplication.instance() or QApplication(sys.argv)
     app.setOrganizationName("Wangle Media")
     app.setApplicationName("MakeSubs")
