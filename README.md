@@ -85,6 +85,9 @@ The first start downloads a few hundred MB of components. While you try it:
 - New features can download models the first time you use them (following a script: 0.7 GB;
   the Arabic dialect model: about 6 GB).
 - A new version can time and word subtitles differently from earlier days' files.
+- From 0.5, each clip also gets a `.makesubs.json` file next to its subtitles (for
+  [Review and fix](#4-review-and-fix)). Going back to an earlier version leaves those files
+  where they are; earlier versions ignore them.
 
 **Upgrade**: when the new version works for you, run the installer again (the same command as
 for installing). Re-running the installer later updates MakeSubs again.
@@ -557,6 +560,10 @@ Language codes are the usual two-letter codes: `ar` Arabic, `en` English, `da` D
 When it finishes, `makesubs` lists every file it wrote per clip. It exits with status 0 when
 all clips succeeded and 1 if any failed, so it can be used in scripts.
 
+To check and fix the subtitles afterwards, open the MakeSubs window, click
+**Review and fix** and choose the clips' `.makesubs.json` files (see
+[Review and fix](#4-review-and-fix)).
+
 ## Known limitations
 
 - **Dialect and scratch audio**: tested on Levantine Arabic (Palestinian, Syrian, Lebanese),
@@ -579,6 +586,9 @@ all clips succeeded and 1 if any failed, so it can be used in scripts.
   `review.txt` on important scenes.
 - **Camera-original raw formats** (BRAW, R3D, ARRIRAW) aren't supported; use the transcodes.
   Avid OP-Atom MXF stores audio in separate files: point MakeSubs at the audio MXF.
+- **Playing the clip in Review and fix** uses Qt's built-in player. If it can't play a clip,
+  the window says so over the picture; the subtitles can still be checked, edited, retimed
+  and saved, without picture and sound.
 
 ## Development
 
