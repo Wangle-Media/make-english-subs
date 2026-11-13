@@ -158,3 +158,25 @@ def test_english_spoken_lines_are_not_untranslated(tmp_path):
     proj = Project(clip=tmp_path / "x.mov", out_dir=tmp_path, fps=None, start_tc=None,
                    tracks=[src, en])
     assert [proj.issue(en, i) for i in range(2)] == ["", "untranslated"]
+
+
+def test_srt_and_sound_sent_to_a_reviewer(app, review_file):
+    """Only the .srt files and the clip's sound, under another name: review, save, same names."""
+    from makesubs.review import ReviewWindow
+    folder = review_file.parent
+    review_file.unlink()
+    wav = folder / "sound_for_review.wav"
+    wav.write_bytes(b"")
+    w = ReviewWindow([folder / "A001C002.en.srt", wav])
+    w.autoplay.setChecked(False)
+    try:
+        assert w.clip_title.text() == "A001C002  (sound_for_review.wav)"
+        assert w.proj.track("en").lines[1].flagged and w.row == 1
+        w.do("ok_next")
+        assert w.save()
+        assert "[?]" not in (folder / "A001C002.en.srt").read_text("utf-8")
+        assert not list(folder.glob("sound_for_review.*.srt"))
+        assert (folder / "A001C002.makesubs.json").exists()  # carry on later
+    finally:
+        w.stacks.clear()
+        w.close()
